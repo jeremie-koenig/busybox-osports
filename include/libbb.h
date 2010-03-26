@@ -327,7 +327,7 @@ void xmove_fd(int, int) FAST_FUNC;
 DIR *xopendir(const char *path) FAST_FUNC;
 DIR *warn_opendir(const char *path) FAST_FUNC;
 
-/* UNUSED: char *xmalloc_realpath(const char *path) FAST_FUNC; */
+char *xmalloc_realpath(const char *path) FAST_FUNC;
 char *xmalloc_readlink(const char *path) FAST_FUNC;
 char *xmalloc_readlink_or_warn(const char *path) FAST_FUNC;
 char *xrealloc_getcwd_or_warn(char *cwd) FAST_FUNC;
