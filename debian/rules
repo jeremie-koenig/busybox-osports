@@ -1,0 +1,162 @@
+#!/usr/bin/make -f
+
+SHELL := sh -e
+DEB_HOST_ARCH := $(shell dpkg-architecture -qDEB_HOST_ARCH)
+DEB_BUILD_ARCH := $(shell dpkg-architecture -qDEB_BUILD_ARCH)
+SOURCE := $(shell dpkg-parsechangelog | sed -ne 's,^Source: *\(.*\)$$,\1,p')
+VERSION_DEBIAN := $(shell dpkg-parsechangelog | sed -ne 's,^Version: *\(.*\)$$,\1,p')
+VERSION := $(shell echo "$(VERSION_DEBIAN)" | sed -e 's,^[^:]*:,,' -e 's,-[^-]*$$,,')
+ 
+BUILD_DIR = debian/build
+STAMPS_DIR = debian/stamps
+
+patch: $(STAMPS_DIR)/patch
+
+$(STAMPS_DIR)/patch:
+	dh_testdir
+	@mkdir -p $(STAMPS_DIR)
+	QUILT_PATCHES=$(CURDIR)/debian/patches quilt --quiltrc /dev/null push -a || test $$? = 2
+	touch $@
+
+setup: $(STAMPS_DIR)/setup_deb $(STAMPS_DIR)/setup_static $(STAMPS_DIR)/setup_udeb
+
+$(STAMPS_DIR)/setup_%: SOURCE_FILES = $(filter-out debian, $(wildcard * .[^.]*))
+$(STAMPS_DIR)/setup_%: DIR=$(BUILD_DIR)/build_$*
+$(STAMPS_DIR)/setup_%: $(STAMPS_DIR)/patch
+	dh_testdir
+	rm -rf '$(DIR)'
+	mkdir -p '$(DIR)'
+	cp -a $(SOURCE_FILES) '$(DIR)'
+	cp debian/config/$* '$(DIR)'/.config
+	$(MAKE) -C '$(DIR)' oldconfig
+	touch $@
+
+build: $(STAMPS_DIR)/build_deb $(STAMPS_DIR)/build_static $(STAMPS_DIR)/build_udeb
+
+$(STAMPS_DIR)/build_%: DIR=$(BUILD_DIR)/build_$*
+$(STAMPS_DIR)/build_%: $(STAMPS_DIR)/setup_%
+	dh_testdir
+	$(MAKE) -C '$(DIR)' install docs/busybox.1 BB_EXTRA_VERSION="$(shell lsb_release -is) $(VERSION_DEBIAN)"
+	touch $@
+
+$(STAMPS_DIR)/indepbuild_%: DIR=$(BUILD_DIR)/indepbuild_$*
+$(STAMPS_DIR)/indepbuild_%: 
+	dh_testdir
+	touch $@
+
+$(BUILD_DIR) $(STAMPS_DIR):
+	@[ -d $@ ] || mkdir $@
+
+maintainerclean:
+	rm -rf $(filter-out .svn debian, $(wildcard * .[^.]*))
+
+clean:
+	dh_testdir
+	rm -rf $(BUILD_DIR) $(STAMPS_DIR)
+	dh_clean
+
+binary-indep: binary-indep_busybox-syslogd binary-indep_udhcpc binary-indep_udhcpd
+
+binary-arch: binary-arch_busybox binary-arch_busybox-static binary-arch_busybox-udeb
+
+binary-arch_busybox: DIR = $(BUILD_DIR)/build_deb
+binary-arch_busybox: export DH_OPTIONS = -pbusybox
+binary-arch_busybox: $(STAMPS_DIR)/build_deb
+	dh_testdir
+	dh_testroot
+	dh_prep
+	dh_install -X.svn --sourcedir=$(DIR)
+	@$(MAKE) -f debian/rules binary-arch_all
+
+binary-arch_busybox-static: DIR = $(BUILD_DIR)/build_static
+binary-arch_busybox-static: export DH_OPTIONS = -pbusybox-static
+binary-arch_busybox-static: $(STAMPS_DIR)/build_static
+	dh_testdir
+	dh_testroot
+	dh_prep
+	dh_install -X.svn --sourcedir=$(DIR)
+	@$(MAKE) -f debian/rules binary-arch_all
+
+binary-arch_busybox-udeb: DIR = $(BUILD_DIR)/build_udeb
+binary-arch_busybox-udeb: export DH_OPTIONS = -pbusybox-udeb
+binary-arch_busybox-udeb: $(STAMPS_DIR)/build_udeb
+	dh_testdir
+	dh_testroot
+	dh_prep
+	# Remove init link, but init support is still compiled in to be
+	# used.
+	rm -f $(DIR)/_install/sbin/init
+	dh_install -X.svn --sourcedir=$(DIR)
+	@$(MAKE) -f debian/rules binary-arch_all
+
+binary-arch_all:
+	dh_installdirs
+	dh_installdocs
+	dh_installchangelogs
+	dh_strip
+	dh_link
+	dh_compress
+	dh_fixperms
+	dh_installdeb
+	dh_shlibdeps
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+binary-indep_busybox-syslogd: export DH_OPTIONS = -pbusybox-syslogd
+binary-indep_busybox-syslogd:
+	dh_testdir
+	dh_testroot
+	dh_prep
+	dh_link
+	dh_installinit -u"defaults 10 90"
+	dh_installinit -u"defaults 11 89" --name=busybox-klogd
+	$(MAKE) -f debian/rules binary-indep_all
+
+binary-indep_udhcpc: export DH_OPTIONS = -pudhcpc
+binary-indep_udhcpc:
+	dh_testdir
+	dh_testroot
+	dh_prep
+	dh_link
+	dh_install -X.svn
+	$(MAKE) -f debian/rules binary-indep_all
+
+binary-indep_udhcpd: export DH_OPTIONS = -pudhcpd
+binary-indep_udhcpd:
+	dh_testdir
+	dh_testroot
+	dh_prep
+	dh_link
+	dh_installinit --onlyscripts
+	dh_install -X.svn
+	$(MAKE) -f debian/rules binary-indep_all
+
+binary-indep_all:
+	dh_installdirs
+	dh_installdocs
+	dh_installchangelogs
+	dh_compress
+	dh_fixperms
+	dh_installdeb
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+binary: binary-indep binary-arch
+
+DIR_ORIG = ../orig/$(SOURCE)-$(VERSION)
+TAR_ORIG_NAME = $(SOURCE)_$(VERSION).orig.tar.bz2
+TAR_ORIG = $(firstword $(wildcard ../$(TAR_ORIG_NAME)) $(wildcard ../orig/$(TAR_ORIG_NAME)))
+
+orig: $(DIR_ORIG)
+	rsync --delete --exclude debian --exclude .svk --exclude .svn --link-dest=$(DIR_ORIG)/ -a $(DIR_ORIG)/ .
+
+$(DIR_ORIG):
+ifeq ($(TAR_ORIG),)
+	$(error Cannot find orig tarball $(TAR_ORIG_NAME))
+else
+	mkdir -p ../orig
+	tar -C ../orig -xjf $(TAR_ORIG)
+endif
+

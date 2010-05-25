@@ -1,0 +1,11 @@
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -1773,7 +1773,7 @@
+ 	{ VSTRFIXED|VTEXTFIXED|VUNSET, "MAIL\0"    , changemail      },
+ 	{ VSTRFIXED|VTEXTFIXED|VUNSET, "MAILPATH\0", changemail      },
+ #endif
+-	{ VSTRFIXED|VTEXTFIXED       , bb_PATH_root_path, changepath },
++	{ VSTRFIXED|VTEXTFIXED|VEXPORT, bb_PATH_root_path, changepath },
+ 	{ VSTRFIXED|VTEXTFIXED       , "PS1=$ "    , NULL            },
+ 	{ VSTRFIXED|VTEXTFIXED       , "PS2=> "    , NULL            },
+ 	{ VSTRFIXED|VTEXTFIXED       , "PS4=+ "    , NULL            },

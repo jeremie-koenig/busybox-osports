@@ -1,0 +1,24 @@
+--- a/Makefile.custom
++++ b/Makefile.custom
+@@ -103,7 +103,7 @@
+ 
+ # Documentation Targets
+ .PHONY: doc
+-doc: docs/busybox.pod docs/BusyBox.txt docs/BusyBox.1 docs/BusyBox.html
++doc: docs/busybox.pod docs/BusyBox.txt docs/busybox.1 docs/BusyBox.html
+ 
+ # FIXME: Doesn't belong here
+        cmd_doc =
+@@ -126,10 +126,10 @@
+ 	$(Q)-mkdir -p docs
+ 	$(Q)-pod2text $< > $@
+ 
+-docs/BusyBox.1: docs/busybox.pod
++docs/busybox.1: docs/busybox.pod
+ 	$(disp_doc)
+ 	$(Q)-mkdir -p docs
+-	$(Q)-pod2man --center=BusyBox --release="version $(VERSION)" \
++	$(Q)-pod2man --center=busybox --release="version $(VERSION)" \
+ 		$< > $@
+ 
+ docs/BusyBox.html: docs/busybox.net/BusyBox.html

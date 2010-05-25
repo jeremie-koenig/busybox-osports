@@ -1,0 +1,11 @@
+--- a/init/init.c
++++ b/init/init.c
+@@ -441,6 +441,8 @@
+ 	for (a = init_action_list; a; a = a->next) {
+ 		if (!(a->action_type & action_type))
+ 			continue;
++		if (a->terminal[0] && access(a->terminal, R_OK | W_OK))
++			continue;
+ 
+ 		if (a->action_type & (SYSINIT | WAIT | ONCE | CTRLALTDEL | SHUTDOWN)) {
+ 			pid_t pid = run(a);
