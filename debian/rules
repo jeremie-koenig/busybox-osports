@@ -2,6 +2,7 @@
 
 SHELL := sh -e
 DEB_HOST_ARCH := $(shell dpkg-architecture -qDEB_HOST_ARCH)
+DEB_HOST_ARCH_OS := $(shell dpkg-architecture -qDEB_HOST_ARCH_OS)
 DEB_BUILD_ARCH := $(shell dpkg-architecture -qDEB_BUILD_ARCH)
 SOURCE := $(shell dpkg-parsechangelog | sed -ne 's,^Source: *\(.*\)$$,\1,p')
 VERSION_DEBIAN := $(shell dpkg-parsechangelog | sed -ne 's,^Version: *\(.*\)$$,\1,p')
@@ -22,12 +23,19 @@ setup: $(STAMPS_DIR)/setup_deb $(STAMPS_DIR)/setup_static $(STAMPS_DIR)/setup_ud
 
 $(STAMPS_DIR)/setup_%: SOURCE_FILES = $(filter-out debian, $(wildcard * .[^.]*))
 $(STAMPS_DIR)/setup_%: DIR=$(BUILD_DIR)/build_$*
+$(STAMPS_DIR)/setup_%: OVERRIDES = debian/config/overrides.$(DEB_HOST_ARCH_OS)
 $(STAMPS_DIR)/setup_%: $(STAMPS_DIR)/patch
 	dh_testdir
 	rm -rf '$(DIR)'
 	mkdir -p '$(DIR)'
 	cp -a $(SOURCE_FILES) '$(DIR)'
-	cp debian/config/$* '$(DIR)'/.config
+	cp debian/config/$* '$(DIR)'/.config.new
+ifneq ($(DEB_HOST_ARCH_OS),linux)
+	# disable PLATFORM_LINUX as needed
+	sed -ri -e 's/^(CONFIG_PLATFORM_LINUX)=y/# \1 is not set/' \
+		'$(DIR)'/.config.new
+endif
+	mv '$(DIR)'/.config.new '$(DIR)'/.config
 	$(MAKE) -C '$(DIR)' oldconfig
 	touch $@
 
