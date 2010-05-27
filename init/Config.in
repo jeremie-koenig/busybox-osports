@@ -135,7 +135,6 @@ config MESG
 config BOOTCHARTD
 	bool "bootchartd"
 	default n
-	depends on PLATFORM_LINUX
 	help
 	  bootchartd is commonly used to profile the boot process
 	  for the purpose of speeding it up. In this case, it is started
