@@ -19,14 +19,97 @@
 
 #include "libbb.h"
 #include <syslog.h>
-#include <sys/klog.h>
 
-static void klogd_signal(int sig)
+
+/* The Linux-specific klogctl(3) interface does not rely on the filesystem and
+ * allows us to change the console loglevel. Alternatively, we read the
+ * messages from _PATH_KLOG. */
+
+#if ENABLE_FEATURE_KLOGD_KLOGCTL
+# include <sys/klog.h>
+
+static void klogd_open(void)
+{
+	/* "Open the log. Currently a NOP" */
+	klogctl(1, NULL, 0);
+}
+
+static void klogd_setloglevel(int lvl)
+{
+	/* "printk() prints a message on the console only if it has a loglevel
+	 * less than console_loglevel". Here we set console_loglevel = lvl. */
+	klogctl(8, NULL, lvl);
+}
+
+static int klogd_read(char *bufp, int len)
+{
+	return klogctl(2, bufp, len);
+}
+
+static void klogd_close(void)
 {
 	/* FYI: cmd 7 is equivalent to setting console_loglevel to 7
 	 * via klogctl(8, NULL, 7). */
 	klogctl(7, NULL, 0); /* "7 -- Enable printk's to console" */
 	klogctl(0, NULL, 0); /* "0 -- Close the log. Currently a NOP" */
+}
+
+#else
+# include <paths.h>
+# ifndef _PATH_KLOG
+#  ifdef __GNU__
+#   define _PATH_KLOG "/dev/klog"
+#  else
+#   error "your system's _PATH_KLOG is unknown"
+#  endif
+# endif
+# define PATH_PRINTK "/proc/sys/kernel/printk"
+
+enum { klogfd = 4 };
+
+static void klogd_open(void)
+{
+	int fd;
+
+	fd = open(_PATH_KLOG, O_RDONLY, 0);
+	if (fd < 0) {
+		logmode = LOGMODE_SYSLOG;
+		bb_perror_msg_and_die("klogd: can't open %s", _PATH_KLOG);
+	}
+	xmove_fd(fd, klogfd);
+}
+
+static void klogd_setloglevel(int lvl UNUSED_PARAM)
+{
+	FILE *f;
+
+	f = fopen("/proc/sys/kernel/printk", "w");
+	if (f != NULL) {
+		fprintf(f, "%d", lvl);
+		fclose(f);
+	} else {
+		syslog(LOG_WARNING, "klogd warning: could not change the"
+				" console loglevel (%s: %m)", PATH_PRINTK);
+	}
+}
+
+static int klogd_read(char *bufp, int len)
+{
+	return read(klogfd, bufp, len);
+}
+
+static void klogd_close(void)
+{
+	klogd_setloglevel(7);
+	close(klogfd);
+}
+
+#endif
+
+
+static void klogd_signal(int sig)
+{
+	klogd_close();
 	syslog(LOG_NOTICE, "klogd: exiting");
 	kill_myself_with_sig(sig);
 }
@@ -60,13 +143,10 @@ int klogd_main(int argc UNUSED_PARAM, char **argv)
 	bb_signals(BB_FATAL_SIGS, klogd_signal);
 	signal(SIGHUP, SIG_IGN);
 
-	/* "Open the log. Currently a NOP" */
-	klogctl(1, NULL, 0);
+	klogd_open();
 
-	/* "printk() prints a message on the console only if it has a loglevel
-	 * less than console_loglevel". Here we set console_loglevel = i. */
 	if (i)
-		klogctl(8, NULL, i);
+		klogd_setloglevel(i);
 
 	syslog(LOG_NOTICE, "klogd started: %s", bb_banner);
 
@@ -77,7 +157,7 @@ int klogd_main(int argc UNUSED_PARAM, char **argv)
 
 		/* "2 -- Read from the log." */
 		start = log_buffer + used;
-		n = klogctl(2, start, KLOGD_LOGBUF_SIZE-1 - used);
+		n = klogd_read(start, KLOGD_LOGBUF_SIZE-1 - used);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
