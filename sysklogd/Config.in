@@ -107,13 +107,31 @@ config FEATURE_LOGREAD_REDUCED_LOCKING
 config KLOGD
 	bool "klogd"
 	default n
-	depends on PLATFORM_LINUX
 	help
 	  klogd is a utility which intercepts and logs all
 	  messages from the Linux kernel and sends the messages
 	  out to the 'syslogd' utility so they can be logged. If
 	  you wish to record the messages produced by the kernel,
 	  you should enable this option.
+
+config FEATURE_KLOGD_KLOGCTL
+	bool "Use the klogctl() interface"
+	default y
+	depends on KLOGD && PLATFORM_LINUX
+	help
+	  The klogd applet supports two interfaces for reading
+	  kernel messages. Linux provides the klogctl() interface
+	  which allows reading past messages from the kernel
+	  ring buffer as well as future messages as they are
+	  emitted.
+
+	  If you answer 'N' here, klogd will use the more portable
+	  approach of reading them from /proc or a device node.
+	  However, this method requires the file to be available and
+	  will only log the messages emitted after klogd is started.
+	  Furthermore it does not support changing the console log level.
+
+	  If in doubt, say 'Y'.
 
 config LOGGER
 	bool "logger"
