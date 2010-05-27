@@ -650,7 +650,6 @@ config FEATURE_STAT_FORMAT
 config STTY
 	bool "stty"
 	default n
-	depends on PLATFORM_LINUX
 	help
 	  stty is used to change and print terminal line settings.
 

@@ -1093,27 +1093,32 @@ static void set_mode(const struct mode_info *info, int reversed,
 			mode->c_cc[VTIME] = 0;
 		}
 	}
-	else if (IXANY && info == &mode_info[IDX_decctlq]) {
+#if IXANY
+	else if (info == &mode_info[IDX_decctlq]) {
 		if (reversed)
 			mode->c_iflag |= IXANY;
 		else
 			mode->c_iflag &= ~IXANY;
 	}
-	else if (TABDLY && info == &mode_info[IDX_tabs]) {
+#endif
+#if TABDLY
+	else if (info == &mode_info[IDX_tabs]) {
 		if (reversed)
 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB3;
 		else
 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB0;
 	}
-	else if (OXTABS && info == &mode_info[IDX_tabs]) {
+#endif
+#if OXTABS	
+	else if (info == &mode_info[IDX_tabs]) {
 		if (reversed)
 			mode->c_oflag |= OXTABS;
 		else
 			mode->c_oflag &= ~OXTABS;
-	} else
-	if (XCASE && IUCLC && OLCUC
-	 && (info == &mode_info[IDX_lcase] || info == &mode_info[IDX_LCASE])
-	) {
+	}
+#endif
+#if XCASE && IUCLC && OLCUC
+	else if (info==&mode_info[IDX_lcase] || info==&mode_info[IDX_LCASE]) {
 		if (reversed) {
 			mode->c_lflag &= ~XCASE;
 			mode->c_iflag &= ~IUCLC;
@@ -1123,7 +1128,9 @@ static void set_mode(const struct mode_info *info, int reversed,
 			mode->c_iflag |= IUCLC;
 			mode->c_oflag |= OLCUC;
 		}
-	} else if (info == &mode_info[IDX_crt]) {
+	}
+#endif
+	else if (info == &mode_info[IDX_crt]) {
 		mode->c_lflag |= ECHOE | ECHOCTL | ECHOKE;
 	} else if (info == &mode_info[IDX_dec]) {
 		mode->c_cc[VINTR] = 3; /* ^C */
