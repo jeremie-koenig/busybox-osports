@@ -8,6 +8,7 @@ menu "Miscellaneous Utilities"
 config ADJTIMEX
 	bool "adjtimex"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Adjtimex reads and optionally sets adjustment parameters for
 	  the Linux clock adjustment algorithm.
@@ -22,6 +23,7 @@ config BBCONFIG
 config BEEP
 	bool "beep"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  The beep applets beeps in a given freq/Hz.
 
@@ -178,6 +180,7 @@ config FEATURE_DC_LIBM
 config DEVFSD
 	bool "devfsd (obsolete)"
 	default n
+	depends on PLATFORM_LINUX
 	select FEATURE_SYSLOG
 	help
 	  This is deprecated and should NOT be used anymore.
@@ -221,6 +224,7 @@ config DEVFSD_VERBOSE
 config FEATURE_DEVFS
 	bool "Use devfs names for all devices (obsolete)"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  This is obsolete and should NOT be used anymore.
 	  Use linux >= 2.6 (optionally with hotplug) and mdev instead!
@@ -240,6 +244,7 @@ config DEVMEM
 config EJECT
 	bool "eject"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Used to eject cdroms. (defaults to /dev/cdrom)
 
@@ -254,6 +259,7 @@ config FEATURE_EJECT_SCSI
 config FBSPLASH
 	bool "fbsplash"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Shows splash image and progress bar on framebuffer device.
 	  Can be used during boot phase of an embedded device. ~2kb.
@@ -275,6 +281,7 @@ config FBSPLASH
 config FLASH_LOCK
 	bool "flash_lock"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  The flash_lock binary from mtd-utils as of git head 5ec0c10d0. This
 	  utility locks part or all of the flash device.
@@ -282,6 +289,7 @@ config FLASH_LOCK
 config FLASH_UNLOCK
 	bool "flash_unlock"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  The flash_unlock binary from mtd-utils as of git head 5ec0c10d0. This
 	  utility unlocks part or all of the flash device.
@@ -289,6 +297,7 @@ config FLASH_UNLOCK
 config FLASH_ERASEALL
 	bool "flash_eraseall"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  The flash_eraseall binary from mtd-utils as of git head c4c6a59eb.
 	  This utility is used to erase the whole MTD device.
@@ -296,6 +305,7 @@ config FLASH_ERASEALL
 config IONICE
 	bool "ionice"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Set/set program io scheduling class and priority
 	  Requires kernel >= 2.6.13
@@ -303,6 +313,7 @@ config IONICE
 config INOTIFYD
 	bool "inotifyd"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Simple inotify daemon. Reports filesystem changes. Requires
 	  kernel >= 2.6.13
@@ -401,6 +412,7 @@ config FEATURE_LESS_LINENUMS
 config HDPARM
 	bool "hdparm"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Get/Set hard drive parameters. Primarily intended for ATA
 	  drives. Adds about 13k (or around 30k if you enable the
@@ -517,6 +529,7 @@ config MT
 config RAIDAUTORUN
 	bool "raidautorun"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  raidautorun tells the kernel md driver to
 	  search and start RAID arrays.
@@ -524,7 +537,7 @@ config RAIDAUTORUN
 config READAHEAD
 	bool "readahead"
 	default n
-	depends on LFS
+	depends on LFS && PLATFORM_LINUX
 	help
 	  Preload the files listed on the command line into RAM cache so that
 	  subsequent reads on these files will not block on disk I/O.
@@ -569,6 +582,7 @@ config STRINGS
 config TASKSET
 	bool "taskset"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Retrieve or set a processes's CPU affinity.
 	  This requires sched_{g,s}etaffinity support in your libc.
@@ -615,6 +629,7 @@ config VOLNAME
 config WATCHDOG
 	bool "watchdog"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  The watchdog utility is used with hardware or software watchdog
 	  device drivers. It opens the specified watchdog device special file

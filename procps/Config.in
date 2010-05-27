@@ -8,6 +8,7 @@ menu "Process Utilities"
 config FREE
 	bool "free"
 	default n
+	depends on PLATFORM_LINUX #sysinfo()
 	help
 	  free displays the total amount of free and used physical and swap
 	  memory in the system, as well as the buffers used by the kernel.
@@ -102,7 +103,7 @@ config FEATURE_PS_WIDE
 config FEATURE_PS_TIME
 	bool "Enable time and elapsed time output"
 	default n
-	depends on PS && DESKTOP
+	depends on PS && DESKTOP && PLATFORM_LINUX #sysinfo()
 	help
 	  Support -o time and -o etime output specifiers.
 
@@ -191,6 +192,7 @@ config FEATURE_TOPMEM
 config UPTIME
 	bool "uptime"
 	default n
+	depends on PLATFORM_LINUX #sysinfo()
 	help
 	  uptime gives a one line display of the current time, how long
 	  the system has been running, how many users are currently logged

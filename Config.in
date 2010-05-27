@@ -30,6 +30,17 @@ config EXTRA_COMPAT
 	  some GNU extensions in libc. You probably only need this option
 	  if you plan to run busybox on desktop.
 
+config PLATFORM_LINUX
+	bool "Enable Linux-specific applets and features"
+	default y
+	help
+	  For the most part, busybox requires only POSIX compatibility
+	  from the target system, but some applets and features use
+	  Linux-specific interfaces.
+
+	  Answering 'N' here will disable such applets and hide the
+	  corresponding configuration options.
+
 choice
 	prompt "Buffer allocation policy"
 	default FEATURE_BUFFERS_USE_MALLOC
@@ -222,6 +233,7 @@ config FEATURE_SUID_CONFIG_QUIET
 config SELINUX
 	bool "Support NSA Security Enhanced Linux"
 	default n
+	depends on PLATFORM_LINUX
 	help
 	  Enable support for SELinux in applets ls, ps, and id. Also provide
 	  the option of compiling in SELinux applets.
