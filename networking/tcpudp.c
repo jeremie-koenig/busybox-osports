@@ -30,9 +30,12 @@
  */
 
 #include "libbb.h"
+
 /* Wants <limits.h> etc, thus included after libbb.h: */
+#ifdef __linux__
 #include <linux/types.h> /* for __be32 etc */
 #include <linux/netfilter_ipv4.h>
+#endif
 
 // TODO: move into this file:
 #include "tcpudp_perhost.h"
@@ -465,6 +468,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
 			/* setup ucspi env */
 			const char *proto = tcp ? "TCP" : "UDP";
 
+#ifdef SO_ORIGINAL_DST
 			/* Extract "original" destination addr:port
 			 * from Linux firewall. Useful when you redirect
 			 * an outbond connection to local handler, and it needs
@@ -474,6 +478,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
 				xsetenv_plain("TCPORIGDSTADDR", addr);
 				free(addr);
 			}
+#endif
 			xsetenv_plain("PROTO", proto);
 			xsetenv_proto(proto, "LOCALADDR", local_addr);
 			xsetenv_proto(proto, "REMOTEADDR", remote_addr);
