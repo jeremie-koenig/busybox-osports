@@ -59,13 +59,18 @@ int cttyhack_main(int argc UNUSED_PARAM, char **argv)
 		close(fd);
 	} else {
 		/* We don't have ctty (or don't have "/dev/tty" node...) */
+#ifdef TIOCGSERIAL
 		if (ioctl(0, TIOCGSERIAL, &u.sr) == 0) {
 			/* this is a serial console */
 			sprintf(console + 8, "S%d", u.sr.line);
-		} else if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
+		}
+#endif
+#ifdef __linux__
+		if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
 			/* this is linux virtual tty */
 			sprintf(console + 8, "S%d" + 1, u.vt.v_active);
 		}
+#endif
 		if (console[8]) {
 			fd = xopen(console, O_RDWR);
 			//bb_error_msg("switching to '%s'", console);
