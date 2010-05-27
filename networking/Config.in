@@ -754,7 +754,6 @@ config SLATTACH
 config TCPSVD
 	bool "tcpsvd"
 	default n
-	depends on PLATFORM_LINUX
 	help
 	  tcpsvd listens on a TCP port and runs a program for each new
 	  connection.
@@ -984,7 +983,6 @@ config IFUPDOWN_UDHCPC_CMD_OPTIONS
 config UDPSVD
 	bool "udpsvd"
 	default n
-	depends on PLATFORM_LINUX
 	help
 	  udpsvd listens on an UDP port and runs a program for each new
 	  connection.
