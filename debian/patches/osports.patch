@@ -1,0 +1,5275 @@
+commit bc1e30cc8e6ceff54e9b70b745929456336c9412
+Author: Jérémie Koenig <jk@jk.fr.eu.org>
+Date:   Fri Mar 26 19:08:53 2010 +0100
+
+    Hurd compat fixes. Mostly dealing with absent PATH_MAX
+    
+    Signed-off-by: Jérémie Koenig <jk@jk.fr.eu.org>
+    Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
+
+diff --git a/coreutils/realpath.c b/coreutils/realpath.c
+index 28906ba..90a71ed 100644
+--- a/coreutils/realpath.c
++++ b/coreutils/realpath.c
+@@ -17,30 +17,20 @@ int realpath_main(int argc UNUSED_PARAM, char **argv)
+ {
+ 	int retval = EXIT_SUCCESS;
+ 
+-#if PATH_MAX > (BUFSIZ+1)
+-	RESERVE_CONFIG_BUFFER(resolved_path, PATH_MAX);
+-# define resolved_path_MUST_FREE 1
+-#else
+-#define resolved_path bb_common_bufsiz1
+-# define resolved_path_MUST_FREE 0
+-#endif
+-
+ 	if (!*++argv) {
+ 		bb_show_usage();
+ 	}
+ 
+ 	do {
+-		if (realpath(*argv, resolved_path) != NULL) {
++		char *resolved_path = xmalloc_realpath(*argv);
++	       	if (resolved_path != NULL) {
+ 			puts(resolved_path);
++			free(resolved_path);
+ 		} else {
+ 			retval = EXIT_FAILURE;
+ 			bb_simple_perror_msg(*argv);
+ 		}
+ 	} while (*++argv);
+ 
+-#if ENABLE_FEATURE_CLEAN_UP && resolved_path_MUST_FREE
+-	RELEASE_CONFIG_BUFFER(resolved_path);
+-#endif
+-
+ 	fflush_stdout_and_exit(retval);
+ }
+diff --git a/debianutils/start_stop_daemon.c b/debianutils/start_stop_daemon.c
+index 6726fc7..ec12318 100644
+--- a/debianutils/start_stop_daemon.c
++++ b/debianutils/start_stop_daemon.c
+@@ -89,16 +89,17 @@ enum {
+ #define TEST  (option_mask32 & OPT_TEST)
+ 
+ struct globals {
+-	struct pid_list *found;
++	struct pid_list *found_procs;
+ 	char *userspec;
+ 	char *cmdname;
+ 	char *execname;
+ 	char *pidfile;
++	char *execname_cmpbuf;
++	unsigned execname_sizeof;
+ 	int user_id;
+ 	smallint signal_nr;
+ };
+ #define G (*(struct globals*)&bb_common_bufsiz1)
+-#define found             (G.found               )
+ #define userspec          (G.userspec            )
+ #define cmdname           (G.cmdname             )
+ #define execname          (G.execname            )
+@@ -118,7 +119,7 @@ struct globals {
+ static int pid_is_exec(pid_t pid)
+ {
+ 	struct stat st;
+-	char buf[sizeof("/proc//exe") + sizeof(int)*3];
++	char buf[sizeof("/proc/%u/exe") + sizeof(int)*3];
+ 
+ 	sprintf(buf, "/proc/%u/exe", (unsigned)pid);
+ 	if (stat(buf, &st) < 0)
+@@ -133,13 +134,13 @@ static int pid_is_exec(pid_t pid)
+ static int pid_is_exec(pid_t pid)
+ {
+ 	ssize_t bytes;
+-	char buf[PATH_MAX];
++	char buf[sizeof("/proc/%u/cmdline") + sizeof(int)*3];
+ 
+ 	sprintf(buf, "/proc/%u/cmdline", (unsigned)pid);
+-	bytes = open_read_close(buf, buf, sizeof(buf) - 1);
++	bytes = open_read_close(buf, G.execname_cmpbuf, G.execname_sizeof);
+ 	if (bytes > 0) {
+-		buf[bytes] = '\0';
+-		return strcmp(buf, execname) == 0;
++		G.execname_cmpbuf[bytes] = '\0';
++		return strcmp(execname, G.execname_cmpbuf) == 0;
+ 	}
+ 	return 0;
+ }
+@@ -194,9 +195,9 @@ static void check(int pid)
+ 		return;
+ 	}
+ 	p = xmalloc(sizeof(*p));
+-	p->next = found;
++	p->next = G.found_procs;
+ 	p->pid = pid;
+-	found = p;
++	G.found_procs = p;
+ }
+ 
+ static void do_pidfile(void)
+@@ -266,13 +267,13 @@ static int do_stop(void)
+ 		bb_error_msg_and_die("internal error, please report");
+ 	}
+ 
+-	if (!found) {
++	if (!G.found_procs) {
+ 		if (!QUIET)
+ 			printf("no %s found; none killed\n", what);
+ 		killed = -1;
+ 		goto ret;
+ 	}
+-	for (p = found; p; p = p->next) {
++	for (p = G.found_procs; p; p = p->next) {
+ 		if (TEST || kill(p->pid, signal_nr) == 0) {
+ 			killed++;
+ 		} else {
+@@ -282,7 +283,7 @@ static int do_stop(void)
+ 	}
+ 	if (!QUIET && killed) {
+ 		printf("stopped %s (pid", what);
+-		for (p = found; p; p = p->next)
++		for (p = G.found_procs; p; p = p->next)
+ 			if (p->pid)
+ 				printf(" %u", (unsigned)p->pid);
+ 		puts(")");
+@@ -365,6 +366,10 @@ int start_stop_daemon_main(int argc UNUSED_PARAM, char **argv)
+ 		startas = execname;
+ 	if (!execname) /* in case -a is given and -x is not */
+ 		execname = startas;
++	if (execname) {
++		G.execname_sizeof = strlen(execname) + 1;
++		G.execname_cmpbuf = xmalloc(G.execname_sizeof + 1);
++	}
+ 
+ //	IF_FEATURE_START_STOP_DAEMON_FANCY(
+ //		if (retry_arg)
+@@ -386,9 +391,9 @@ int start_stop_daemon_main(int argc UNUSED_PARAM, char **argv)
+ 		return (opt & OPT_OKNODO) ? 0 : (i <= 0);
+ 	}
+ 
+-	if (found) {
++	if (G.found_procs) {
+ 		if (!QUIET)
+-			printf("%s is already running\n%u\n", execname, (unsigned)found->pid);
++			printf("%s is already running\n%u\n", execname, (unsigned)G.found_procs->pid);
+ 		return !(opt & OPT_OKNODO);
+ 	}
+ 
+diff --git a/include/libbb.h b/include/libbb.h
+index 104a399..a4ad6ed 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -327,7 +327,7 @@ void xmove_fd(int, int) FAST_FUNC;
+ DIR *xopendir(const char *path) FAST_FUNC;
+ DIR *warn_opendir(const char *path) FAST_FUNC;
+ 
+-/* UNUSED: char *xmalloc_realpath(const char *path) FAST_FUNC; */
++char *xmalloc_realpath(const char *path) FAST_FUNC;
+ char *xmalloc_readlink(const char *path) FAST_FUNC;
+ char *xmalloc_readlink_or_warn(const char *path) FAST_FUNC;
+ char *xrealloc_getcwd_or_warn(char *cwd) FAST_FUNC;
+diff --git a/libbb/safe_gethostname.c b/libbb/safe_gethostname.c
+index 7407fb7..e93254b 100644
+--- a/libbb/safe_gethostname.c
++++ b/libbb/safe_gethostname.c
+@@ -59,8 +59,12 @@ char* FAST_FUNC safe_gethostname(void)
+  */
+ char* FAST_FUNC safe_getdomainname(void)
+ {
++/* The field domainname of struct utsname is Linux specific. */
++#if defined(__linux__)
+ 	struct utsname uts;
+-
+ 	uname(&uts);
+ 	return xstrndup(!uts.domainname[0] ? "?" : uts.domainname, sizeof(uts.domainname));
++#else
++	return xstrdup("?");
++#endif
+ }
+diff --git a/libbb/xconnect.c b/libbb/xconnect.c
+index 85f93b6..dcf978b 100644
+--- a/libbb/xconnect.c
++++ b/libbb/xconnect.c
+@@ -20,6 +20,8 @@ int FAST_FUNC setsockopt_broadcast(int fd)
+ {
+ 	return setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &const_int_1, sizeof(const_int_1));
+ }
++
++#ifdef SO_BINDTODEVICE
+ int FAST_FUNC setsockopt_bindtodevice(int fd, const char *iface)
+ {
+ 	int r;
+@@ -35,6 +37,14 @@ int FAST_FUNC setsockopt_bindtodevice(int fd, const char *iface)
+ 		bb_perror_msg("can't bind to interface %s", iface);
+ 	return r;
+ }
++#else
++int FAST_FUNC setsockopt_bindtodevice(int fd UNUSED_PARAM,
++		const char *iface UNUSED_PARAM)
++{
++	bb_error_msg("SO_BINDTODEVICE is not supported on this system");
++	return -1;
++}
++#endif
+ 
+ len_and_sockaddr* FAST_FUNC get_sock_lsa(int fd)
+ {
+diff --git a/libbb/xreadlink.c b/libbb/xreadlink.c
+index 8d232f1..faa0e16 100644
+--- a/libbb/xreadlink.c
++++ b/libbb/xreadlink.c
+@@ -100,18 +100,16 @@ char* FAST_FUNC xmalloc_readlink_or_warn(const char *path)
+ 	return buf;
+ }
+ 
+-/* UNUSED */
+-#if 0
+ char* FAST_FUNC xmalloc_realpath(const char *path)
+ {
+ #if defined(__GLIBC__) && !defined(__UCLIBC__)
+ 	/* glibc provides a non-standard extension */
++	/* new: POSIX.1-2008 specifies this behavior as well */
+ 	return realpath(path, NULL);
+ #else
+ 	char buf[PATH_MAX+1];
+ 
+-	/* on error returns NULL (xstrdup(NULL) ==NULL) */
++	/* on error returns NULL (xstrdup(NULL) == NULL) */
+ 	return xstrdup(realpath(path, buf));
+ #endif
+ }
+-#endif
+diff --git a/scripts/basic/docproc.c b/scripts/basic/docproc.c
+index e178d72..12341e2 100644
+--- a/scripts/basic/docproc.c
++++ b/scripts/basic/docproc.c
+@@ -79,7 +79,9 @@ void exec_kernel_doc(char **svec)
+ {
+ 	pid_t pid;
+ 	int ret;
+-	char real_filename[PATH_MAX + 1];
++	char *real_filename;
++	int rflen;
++
+ 	/* Make sure output generated so far are flushed */
+ 	fflush(stdout);
+ 	switch(pid=fork()) {
+@@ -87,10 +89,11 @@ void exec_kernel_doc(char **svec)
+ 			perror("fork");
+ 			exit(1);
+ 		case  0:
+-			memset(real_filename, 0, sizeof(real_filename));
+-			strncat(real_filename, getenv("SRCTREE"), PATH_MAX);
+-			strncat(real_filename, KERNELDOCPATH KERNELDOC,
+-					PATH_MAX - strlen(real_filename));
++			rflen  = strlen(getenv("SRCTREE"));
++			rflen += strlen(KERNELDOCPATH KERNELDOC);
++			real_filename = alloca(rflen + 1);
++			strcpy(real_filename, getenv("SRCTREE"));
++			strcat(real_filename, KERNELDOCPATH KERNELDOC);
+ 			execvp(real_filename, svec);
+ 			fprintf(stderr, "exec ");
+ 			perror(real_filename);
+@@ -166,11 +169,10 @@ void find_export_symbols(char * filename)
+ 	struct symfile *sym;
+ 	char line[MAXLINESZ];
+ 	if (filename_exist(filename) == NULL) {
+-		char real_filename[PATH_MAX + 1];
+-		memset(real_filename, 0, sizeof(real_filename));
+-		strncat(real_filename, getenv("SRCTREE"), PATH_MAX);
+-		strncat(real_filename, filename,
+-				PATH_MAX - strlen(real_filename));
++		int rflen = strlen(getenv("SRCTREE")) + strlen(filename);
++		char *real_filename = alloca(rflen + 1);
++		strcpy(real_filename, getenv("SRCTREE"));
++		strcat(real_filename, filename);
+ 		sym = add_new_file(filename);
+ 		fp = fopen(real_filename, "r");
+ 		if (fp == NULL)
+diff --git a/scripts/basic/fixdep.c b/scripts/basic/fixdep.c
+index 6d61044..bbb575c 100644
+--- a/scripts/basic/fixdep.c
++++ b/scripts/basic/fixdep.c
+@@ -203,7 +203,7 @@ void clear_config(void)
+  */
+ void use_config(char *m, int slen)
+ {
+-	char s[PATH_MAX];
++	char *s = alloca(slen+1);
+ 	char *p;
+ 
+ 	if (is_defined_config(m, slen))
+@@ -310,7 +310,7 @@ void parse_dep_file(void *map, size_t len)
+ 	char *m = map;
+ 	char *end = m + len;
+ 	char *p;
+-	char s[PATH_MAX];
++	char *s = alloca(len);
+ 
+ 	p = memchr(m, ':', len);
+ 	if (!p) {
+diff --git a/scripts/kconfig/confdata.c b/scripts/kconfig/confdata.c
+index 9365a12..4f83fbf 100644
+--- a/scripts/kconfig/confdata.c
++++ b/scripts/kconfig/confdata.c
+@@ -70,12 +70,13 @@ static char *conf_expand_value(const char *in)
+ char *conf_get_default_confname(void)
+ {
+ 	struct stat buf;
+-	static char fullname[PATH_MAX+1];
++	static char *fullname = NULL;
+ 	char *env, *name;
+ 
+ 	name = conf_expand_value(conf_defname);
+ 	env = getenv(SRCTREE);
+ 	if (env) {
++		fullname = realloc(fullname, strlen(env) + strlen(name) + 2);
+ 		sprintf(fullname, "%s/%s", env, name);
+ 		if (!stat(fullname, &buf))
+ 			return fullname;
+diff --git a/scripts/kconfig/mconf.c b/scripts/kconfig/mconf.c
+index 647ec09..0c548bf 100644
+--- a/scripts/kconfig/mconf.c
++++ b/scripts/kconfig/mconf.c
+@@ -258,7 +258,7 @@ search_help[] = N_(
+ 
+ static char buf[4096], *bufptr = buf;
+ static char input_buf[4096];
+-static char filename[PATH_MAX+1] = ".config";
++static const char filename[] = ".config";
+ static char *args[1024], **argptr = args;
+ static int indent;
+ static struct termios ios_org;
+diff --git a/scripts/kconfig/zconf.l b/scripts/kconfig/zconf.l
+index d839577..6a58b80 100644
+--- a/scripts/kconfig/zconf.l
++++ b/scripts/kconfig/zconf.l
+@@ -265,13 +265,14 @@ static void zconf_endhelp(void)
+  */
+ FILE *zconf_fopen(const char *name)
+ {
+-	char *env, fullname[PATH_MAX+1];
++	char *env;
+ 	FILE *f;
+ 
+ 	f = fopen(name, "r");
+ 	if (!f && name[0] != '/') {
+ 		env = getenv(SRCTREE);
+ 		if (env) {
++			char *fullname = alloca(strlen(env) + strlen(name) + 2);
+ 			sprintf(fullname, "%s/%s", env, name);
+ 			f = fopen(fullname, "r");
+ 		}
+diff --git a/scripts/kconfig/zconf.y b/scripts/kconfig/zconf.y
+index 0a7a796..2007a4e 100644
+--- a/scripts/kconfig/zconf.y
++++ b/scripts/kconfig/zconf.y
+@@ -14,8 +14,6 @@
+ #define LKC_DIRECT_LINK
+ #include "lkc.h"
+ 
+-#include "zconf.hash.c"
+-
+ #define printd(mask, fmt...) if (cdebug & (mask)) printf(fmt)
+ 
+ #define PRINTD		0x0001
+@@ -99,6 +97,10 @@ static struct menu *current_menu, *current_entry;
+ 		menu_end_menu();
+ } if_entry menu_entry choice_entry
+ 
++%{
++#include "zconf.hash.c"
++%}
++
+ %%
+ input: stmt_list;
+ 
+diff --git a/util-linux/umount.c b/util-linux/umount.c
+index a4b2bd0..a19f86c 100644
+--- a/util-linux/umount.c
++++ b/util-linux/umount.c
+@@ -39,6 +39,10 @@
+ # define MS_RELATIME    (1 << 21)
+ #endif
+ #include "libbb.h"
++#ifndef PATH_MAX
++# define PATH_MAX (4*1024)
++#endif
++
+ 
+ #if defined(__dietlibc__)
+ /* 16.12.2006, Sampo Kellomaki (sampo@iki.fi)
+@@ -69,7 +73,7 @@ int umount_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int umount_main(int argc UNUSED_PARAM, char **argv)
+ {
+ 	int doForce;
+-	char *const path = xmalloc(PATH_MAX + 2); /* to save stack */
++	char *const buf = xmalloc(PATH_MAX * 2 + 128); /* to save stack */
+ 	struct mntent me;
+ 	FILE *fp;
+ 	char *fstype = NULL;
+@@ -100,7 +104,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 		if (opt & OPT_ALL)
+ 			bb_error_msg_and_die("can't open '%s'", bb_path_mtab_file);
+ 	} else {
+-		while (getmntent_r(fp, &me, path, PATH_MAX)) {
++		while (getmntent_r(fp, &me, buf, PATH_MAX * 2 + 128)) {
+ 			/* Match fstype if passed */
+ 			if (!match_fstype(&me, fstype))
+ 				continue;
+@@ -124,10 +128,11 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 	for (;;) {
+ 		int curstat;
+ 		char *zapit = *argv;
++		char *path;
+ 
+ 		// Do we already know what to umount this time through the loop?
+ 		if (m)
+-			safe_strncpy(path, m->dir, PATH_MAX);
++			path = xstrdup(m->dir);
+ 		// For umount -a, end of mtab means time to exit.
+ 		else if (opt & OPT_ALL)
+ 			break;
+@@ -136,10 +141,12 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 			if (!zapit)
+ 				break;
+ 			argv++;
+-			realpath(zapit, path);
+-			for (m = mtl; m; m = m->next)
+-				if (!strcmp(path, m->dir) || !strcmp(path, m->device))
+-					break;
++			path = xmalloc_realpath(zapit);
++			if (path) {
++				for (m = mtl; m; m = m->next)
++					if (strcmp(path, m->dir) == 0 || strcmp(path, m->device) == 0)
++						break;
++			}
+ 		}
+ 		// If we couldn't find this sucker in /etc/mtab, punt by passing our
+ 		// command line argument straight to the umount syscall.  Otherwise,
+@@ -181,9 +188,13 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 		// Find next matching mtab entry for -a or umount /dev
+ 		// Note this means that "umount /dev/blah" will unmount all instances
+ 		// of /dev/blah, not just the most recent.
+-		if (m) while ((m = m->next) != NULL)
+-			if ((opt & OPT_ALL) || !strcmp(path, m->device))
+-				break;
++		if (m) {
++			while ((m = m->next) != NULL)
++				// NB: if m is non-NULL, path is non-NULL as well
++				if ((opt & OPT_ALL) || strcmp(path, m->device) == 0)
++					break;
++		}
++		free(path);
+ 	}
+ 
+ 	// Free mtab list if necessary
+@@ -195,7 +206,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 			free(mtl);
+ 			mtl = m;
+ 		}
+-		free(path);
++		free(buf);
+ 	}
+ 
+ 	return status;
+
+commit ef8c9ceabfa78a99ae504dbcee61741b58fc07f6
+Author: Denys Vlasenko <vda.linux@googlemail.com>
+Date:   Mon Mar 29 11:20:00 2010 +0200
+
+    provide safe_gethostname() for non-linux systems
+    
+    Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
+
+diff --git a/libbb/safe_gethostname.c b/libbb/safe_gethostname.c
+index e93254b..05e0954 100644
+--- a/libbb/safe_gethostname.c
++++ b/libbb/safe_gethostname.c
+@@ -59,12 +59,16 @@ char* FAST_FUNC safe_gethostname(void)
+  */
+ char* FAST_FUNC safe_getdomainname(void)
+ {
+-/* The field domainname of struct utsname is Linux specific. */
+ #if defined(__linux__)
++/* The field domainname of struct utsname is Linux specific. */
+ 	struct utsname uts;
+ 	uname(&uts);
+ 	return xstrndup(!uts.domainname[0] ? "?" : uts.domainname, sizeof(uts.domainname));
+ #else
+-	return xstrdup("?");
++	/* We really don't care about people with domain names wider than most screens */
++	char buf[256];
++	int r = getdomainname(buf, sizeof(buf));
++	buf[sizeof(buf)-1] = '\0';
++	return xstrdup(r < 0 ? "?" : buf);
+ #endif
+ }
+
+commit 924f307e814264de855e2c69b27c3800c4f95e07
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:36:40 2010 +0200
+
+    update scripts/kconfig/*_shipped
+    
+    These files are generated using bison and lex, but I forgot to include
+    the new versions in my Hurd kconfig patch.
+
+diff --git a/scripts/kconfig/lex.zconf.c_shipped b/scripts/kconfig/lex.zconf.c_shipped
+index 5fc323d..9fc86bf 100644
+--- a/scripts/kconfig/lex.zconf.c_shipped
++++ b/scripts/kconfig/lex.zconf.c_shipped
+@@ -5,10 +5,29 @@
+ 
+ /* A lexical scanner generated by flex */
+ 
++#define yy_create_buffer zconf_create_buffer
++#define yy_delete_buffer zconf_delete_buffer
++#define yy_flex_debug zconf_flex_debug
++#define yy_init_buffer zconf_init_buffer
++#define yy_flush_buffer zconf_flush_buffer
++#define yy_load_buffer_state zconf_load_buffer_state
++#define yy_switch_to_buffer zconf_switch_to_buffer
++#define yyin zconfin
++#define yyleng zconfleng
++#define yylex zconflex
++#define yylineno zconflineno
++#define yyout zconfout
++#define yyrestart zconfrestart
++#define yytext zconftext
++#define yywrap zconfwrap
++#define yyalloc zconfalloc
++#define yyrealloc zconfrealloc
++#define yyfree zconffree
++
+ #define FLEX_SCANNER
+ #define YY_FLEX_MAJOR_VERSION 2
+ #define YY_FLEX_MINOR_VERSION 5
+-#define YY_FLEX_SUBMINOR_VERSION 31
++#define YY_FLEX_SUBMINOR_VERSION 35
+ #if YY_FLEX_SUBMINOR_VERSION > 0
+ #define FLEX_BETA
+ #endif
+@@ -30,7 +49,15 @@
+ 
+ /* C99 systems have <inttypes.h>. Non-C99 systems may or may not. */
+ 
+-#if defined __STDC_VERSION__ && __STDC_VERSION__ >= 199901L
++#if defined (__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
++
++/* C99 says to define __STDC_LIMIT_MACROS before including stdint.h,
++ * if you want the limit (max/min) macros for int types. 
++ */
++#ifndef __STDC_LIMIT_MACROS
++#define __STDC_LIMIT_MACROS 1
++#endif
++
+ #include <inttypes.h>
+ typedef int8_t flex_int8_t;
+ typedef uint8_t flex_uint8_t;
+@@ -42,10 +69,9 @@ typedef uint32_t flex_uint32_t;
+ typedef signed char flex_int8_t;
+ typedef short int flex_int16_t;
+ typedef int flex_int32_t;
+-typedef unsigned char flex_uint8_t;
++typedef unsigned char flex_uint8_t; 
+ typedef unsigned short int flex_uint16_t;
+ typedef unsigned int flex_uint32_t;
+-#endif /* ! C99 */
+ 
+ /* Limits of integral types. */
+ #ifndef INT8_MIN
+@@ -76,6 +102,8 @@ typedef unsigned int flex_uint32_t;
+ #define UINT32_MAX             (4294967295U)
+ #endif
+ 
++#endif /* ! C99 */
++
+ #endif /* ! FLEXINT_H */
+ 
+ #ifdef __cplusplus
+@@ -85,11 +113,12 @@ typedef unsigned int flex_uint32_t;
+ 
+ #else	/* ! __cplusplus */
+ 
+-#if __STDC__
++/* C99 requires __STDC__ to be defined as 1. */
++#if defined (__STDC__)
+ 
+ #define YY_USE_CONST
+ 
+-#endif	/* __STDC__ */
++#endif	/* defined (__STDC__) */
+ #endif	/* ! __cplusplus */
+ 
+ #ifdef YY_USE_CONST
+@@ -131,9 +160,21 @@ typedef unsigned int flex_uint32_t;
+ 
+ /* Size of default input buffer. */
+ #ifndef YY_BUF_SIZE
++#ifdef __ia64__
++/* On IA-64, the buffer size is 16k, not 8k.
++ * Moreover, YY_BUF_SIZE is 2*YY_READ_BUF_SIZE in the general case.
++ * Ditto for the __ia64__ case accordingly.
++ */
++#define YY_BUF_SIZE 32768
++#else
+ #define YY_BUF_SIZE 16384
++#endif /* __ia64__ */
+ #endif
+ 
++/* The state buf must be large enough to hold one state per character in the main buffer.
++ */
++#define YY_STATE_BUF_SIZE   ((YY_BUF_SIZE + 2) * sizeof(yy_state_type))
++
+ #ifndef YY_TYPEDEF_YY_BUFFER_STATE
+ #define YY_TYPEDEF_YY_BUFFER_STATE
+ typedef struct yy_buffer_state *YY_BUFFER_STATE;
+@@ -148,7 +189,7 @@ extern FILE *zconfin, *zconfout;
+ #define EOB_ACT_LAST_MATCH 2
+ 
+     #define YY_LESS_LINENO(n)
+-
++    
+ /* Return all but the first "n" matched characters back to the input stream. */
+ #define yyless(n) \
+ 	do \
+@@ -165,14 +206,9 @@ extern FILE *zconfin, *zconfout;
+ 
+ #define unput(c) yyunput( c, (yytext_ptr)  )
+ 
+-/* The following is because we cannot portably get our hands on size_t
+- * (without autoconf's help, which isn't available because we want
+- * flex-generated scanners to compile on their own).
+- */
+-
+ #ifndef YY_TYPEDEF_YY_SIZE_T
+ #define YY_TYPEDEF_YY_SIZE_T
+-typedef unsigned int yy_size_t;
++typedef size_t yy_size_t;
+ #endif
+ 
+ #ifndef YY_STRUCT_YY_BUFFER_STATE
+@@ -215,7 +251,7 @@ struct yy_buffer_state
+ 
+     int yy_bs_lineno; /**< The line count. */
+     int yy_bs_column; /**< The column count. */
+-
++    
+ 	/* Whether to try to fill the input buffer when we reach the
+ 	 * end of it.
+ 	 */
+@@ -267,7 +303,7 @@ int zconfleng;
+ 
+ /* Points to current character in buffer. */
+ static char *yy_c_buf_p = (char *) 0;
+-static int yy_init = 1;		/* whether we need to initialize */
++static int yy_init = 0;		/* whether we need to initialize */
+ static int yy_start = 0;	/* start state number */
+ 
+ /* Flag which is used to allow zconfwrap()'s to do buffer switches
+@@ -323,7 +359,7 @@ void zconffree (void *  );
+ 
+ /* Begin user sect3 */
+ 
+-#define zconfwrap() 1
++#define zconfwrap(n) 1
+ #define YY_SKIP_YYWRAP
+ 
+ typedef unsigned char YY_CHAR;
+@@ -785,10 +821,9 @@ void append_string(const char *str, int size)
+ {
+ 	int new_size = text_size + size + 1;
+ 	if (size > 70) {
+-		fprintf (stderr, "%s:%d error: Overlong line\n",
+-		current_file->name, current_file->lineno);
++	        fprintf (stderr, "%s:%d error: Overlong line\n",
++			 current_file->name, current_file->lineno);
+ 	}
+-
+ 	if (new_size > text_asize) {
+ 		new_size += START_STRSIZE - 1;
+ 		new_size &= -START_STRSIZE;
+@@ -825,6 +860,37 @@ void alloc_string(const char *str, int size)
+ #define YY_EXTRA_TYPE void *
+ #endif
+ 
++static int yy_init_globals (void );
++
++/* Accessor methods to globals.
++   These are made visible to non-reentrant scanners for convenience. */
++
++int zconflex_destroy (void );
++
++int zconfget_debug (void );
++
++void zconfset_debug (int debug_flag  );
++
++YY_EXTRA_TYPE zconfget_extra (void );
++
++void zconfset_extra (YY_EXTRA_TYPE user_defined  );
++
++FILE *zconfget_in (void );
++
++void zconfset_in  (FILE * in_str  );
++
++FILE *zconfget_out (void );
++
++void zconfset_out  (FILE * out_str  );
++
++int zconfget_leng (void );
++
++char *zconfget_text (void );
++
++int zconfget_lineno (void );
++
++void zconfset_lineno (int line_number  );
++
+ /* Macros after this point can all be overridden by user definitions in
+  * section 1.
+  */
+@@ -838,7 +904,7 @@ extern int zconfwrap (void );
+ #endif
+ 
+     static void yyunput (int c,char *buf_ptr  );
+-
++    
+ #ifndef yytext_ptr
+ static void yy_flex_strncpy (char *,yyconst char *,int );
+ #endif
+@@ -847,9 +913,6 @@ static void yy_flex_strncpy (char *,yyconst char *,int );
+ static int yy_flex_strlen (yyconst char * );
+ #endif
+ 
+-//bbox: suppressing "defined but not used" warning
+-#define YY_NO_INPUT 1
+-
+ #ifndef YY_NO_INPUT
+ 
+ #ifdef __cplusplus
+@@ -862,7 +925,12 @@ static int input (void );
+ 
+ /* Amount of stuff to slurp up with each read. */
+ #ifndef YY_READ_BUF_SIZE
++#ifdef __ia64__
++/* On IA-64, the buffer size is 16k, not 8k */
++#define YY_READ_BUF_SIZE 16384
++#else
+ #define YY_READ_BUF_SIZE 8192
++#endif /* __ia64__ */
+ #endif
+ 
+ /* Copy whatever the last rule matched to the standard output. */
+@@ -870,7 +938,7 @@ static int input (void );
+ /* This used to be an fputs(), but since the string might contain NUL's,
+  * we now use fwrite().
+  */
+-#define ECHO (void) fwrite( zconftext, zconfleng, 1, zconfout )
++#define ECHO do { if (fwrite( zconftext, zconfleng, 1, zconfout )) {} } while (0)
+ #endif
+ 
+ /* Gets input and stuffs it into "buf".  number of characters read, or YY_NULL,
+@@ -946,13 +1014,13 @@ YY_DECL
+ 	register yy_state_type yy_current_state;
+ 	register char *yy_cp, *yy_bp;
+ 	register int yy_act;
+-
++    
+ 	int str = 0;
+ 	int ts, i;
+ 
+-	if ( (yy_init) )
++	if ( !(yy_init) )
+ 		{
+-		(yy_init) = 0;
++		(yy_init) = 1;
+ 
+ #ifdef YY_USER_INIT
+ 		YY_USER_INIT;
+@@ -1460,7 +1528,7 @@ static int yy_get_next_buffer (void)
+ 
+ 	else
+ 		{
+-			size_t num_to_read =
++			int num_to_read =
+ 			YY_CURRENT_BUFFER_LVALUE->yy_buf_size - number_to_move - 1;
+ 
+ 		while ( num_to_read <= 0 )
+@@ -1505,7 +1573,7 @@ static int yy_get_next_buffer (void)
+ 
+ 		/* Read in more data. */
+ 		YY_INPUT( (&YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[number_to_move]),
+-			(yy_n_chars), num_to_read );
++			(yy_n_chars), (size_t) num_to_read );
+ 
+ 		YY_CURRENT_BUFFER_LVALUE->yy_n_chars = (yy_n_chars);
+ 		}
+@@ -1529,6 +1597,14 @@ static int yy_get_next_buffer (void)
+ 	else
+ 		ret_val = EOB_ACT_CONTINUE_SCAN;
+ 
++	if ((yy_size_t) ((yy_n_chars) + number_to_move) > YY_CURRENT_BUFFER_LVALUE->yy_buf_size) {
++		/* Extend the array by 50%, plus the number we really need. */
++		yy_size_t new_size = (yy_n_chars) + number_to_move + ((yy_n_chars) >> 1);
++		YY_CURRENT_BUFFER_LVALUE->yy_ch_buf = (char *) zconfrealloc((void *) YY_CURRENT_BUFFER_LVALUE->yy_ch_buf,new_size  );
++		if ( ! YY_CURRENT_BUFFER_LVALUE->yy_ch_buf )
++			YY_FATAL_ERROR( "out of dynamic memory in yy_get_next_buffer()" );
++	}
++
+ 	(yy_n_chars) += number_to_move;
+ 	YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[(yy_n_chars)] = YY_END_OF_BUFFER_CHAR;
+ 	YY_CURRENT_BUFFER_LVALUE->yy_ch_buf[(yy_n_chars) + 1] = YY_END_OF_BUFFER_CHAR;
+@@ -1544,7 +1620,7 @@ static int yy_get_next_buffer (void)
+ {
+ 	register yy_state_type yy_current_state;
+ 	register char *yy_cp;
+-
++    
+ 	yy_current_state = (yy_start);
+ 
+ 	for ( yy_cp = (yytext_ptr) + YY_MORE_ADJ; yy_cp < (yy_c_buf_p); ++yy_cp )
+@@ -1563,7 +1639,7 @@ static int yy_get_next_buffer (void)
+     static yy_state_type yy_try_NUL_trans  (yy_state_type yy_current_state )
+ {
+ 	register int yy_is_jam;
+-
++    
+ 	yy_current_state = yy_nxt[yy_current_state][1];
+ 	yy_is_jam = (yy_current_state <= 0);
+ 
+@@ -1573,7 +1649,7 @@ static int yy_get_next_buffer (void)
+     static void yyunput (int c, register char * yy_bp )
+ {
+ 	register char *yy_cp;
+-
++    
+     yy_cp = (yy_c_buf_p);
+ 
+ 	/* undo effects of setting up zconftext */
+@@ -1616,7 +1692,7 @@ static int yy_get_next_buffer (void)
+ 
+ {
+ 	int c;
+-
++    
+ 	*(yy_c_buf_p) = (yy_hold_char);
+ 
+ 	if ( *(yy_c_buf_p) == YY_END_OF_BUFFER_CHAR )
+@@ -1683,12 +1759,12 @@ static int yy_get_next_buffer (void)
+ 
+ /** Immediately switch to a different input stream.
+  * @param input_file A readable stream.
+- *
++ * 
+  * @note This function does not reset the start condition to @c INITIAL .
+  */
+     void zconfrestart  (FILE * input_file )
+ {
+-
++    
+ 	if ( ! YY_CURRENT_BUFFER ){
+         zconfensure_buffer_stack ();
+ 		YY_CURRENT_BUFFER_LVALUE =
+@@ -1701,11 +1777,11 @@ static int yy_get_next_buffer (void)
+ 
+ /** Switch to a different input buffer.
+  * @param new_buffer The new input buffer.
+- *
++ * 
+  */
+     void zconf_switch_to_buffer  (YY_BUFFER_STATE  new_buffer )
+ {
+-
++    
+ 	/* TODO. We should be able to replace this entire function body
+ 	 * with
+ 	 *		zconfpop_buffer_state();
+@@ -1745,13 +1821,13 @@ static void zconf_load_buffer_state  (void)
+ /** Allocate and initialize an input buffer state.
+  * @param file A readable stream.
+  * @param size The character buffer size in bytes. When in doubt, use @c YY_BUF_SIZE.
+- *
++ * 
+  * @return the allocated buffer state.
+  */
+     YY_BUFFER_STATE zconf_create_buffer  (FILE * file, int  size )
+ {
+ 	YY_BUFFER_STATE b;
+-
++    
+ 	b = (YY_BUFFER_STATE) zconfalloc(sizeof( struct yy_buffer_state )  );
+ 	if ( ! b )
+ 		YY_FATAL_ERROR( "out of dynamic memory in zconf_create_buffer()" );
+@@ -1774,11 +1850,11 @@ static void zconf_load_buffer_state  (void)
+ 
+ /** Destroy the buffer.
+  * @param b a buffer created with zconf_create_buffer()
+- *
++ * 
+  */
+     void zconf_delete_buffer (YY_BUFFER_STATE  b )
+ {
+-
++    
+ 	if ( ! b )
+ 		return;
+ 
+@@ -1799,7 +1875,7 @@ static void zconf_load_buffer_state  (void)
+ 
+ {
+ 	int oerrno = errno;
+-
++    
+ 	zconf_flush_buffer(b );
+ 
+ 	b->yy_input_file = file;
+@@ -1815,13 +1891,13 @@ static void zconf_load_buffer_state  (void)
+     }
+ 
+         b->yy_is_interactive = 0;
+-
++    
+ 	errno = oerrno;
+ }
+ 
+ /** Discard all buffered characters. On the next scan, YY_INPUT will be called.
+  * @param b the buffer state to be flushed, usually @c YY_CURRENT_BUFFER.
+- *
++ * 
+  */
+     void zconf_flush_buffer (YY_BUFFER_STATE  b )
+ {
+@@ -1850,7 +1926,7 @@ static void zconf_load_buffer_state  (void)
+  *  the current state. This function will allocate the stack
+  *  if necessary.
+  *  @param new_buffer The new state.
+- *
++ *  
+  */
+ void zconfpush_buffer_state (YY_BUFFER_STATE new_buffer )
+ {
+@@ -1880,7 +1956,7 @@ void zconfpush_buffer_state (YY_BUFFER_STATE new_buffer )
+ 
+ /** Removes and deletes the top of the stack, if present.
+  *  The next element becomes the new top.
+- *
++ *  
+  */
+ void zconfpop_buffer_state (void)
+ {
+@@ -1904,7 +1980,7 @@ void zconfpop_buffer_state (void)
+ static void zconfensure_buffer_stack (void)
+ {
+ 	int num_to_alloc;
+-
++    
+ 	if (!(yy_buffer_stack)) {
+ 
+ 		/* First allocation is just for 2 elements, since we don't know if this
+@@ -1915,9 +1991,11 @@ static void zconfensure_buffer_stack (void)
+ 		(yy_buffer_stack) = (struct yy_buffer_state**)zconfalloc
+ 								(num_to_alloc * sizeof(struct yy_buffer_state*)
+ 								);
+-
++		if ( ! (yy_buffer_stack) )
++			YY_FATAL_ERROR( "out of dynamic memory in zconfensure_buffer_stack()" );
++								  
+ 		memset((yy_buffer_stack), 0, num_to_alloc * sizeof(struct yy_buffer_state*));
+-
++				
+ 		(yy_buffer_stack_max) = num_to_alloc;
+ 		(yy_buffer_stack_top) = 0;
+ 		return;
+@@ -1933,6 +2011,8 @@ static void zconfensure_buffer_stack (void)
+ 								((yy_buffer_stack),
+ 								num_to_alloc * sizeof(struct yy_buffer_state*)
+ 								);
++		if ( ! (yy_buffer_stack) )
++			YY_FATAL_ERROR( "out of dynamic memory in zconfensure_buffer_stack()" );
+ 
+ 		/* zero only the new slots.*/
+ 		memset((yy_buffer_stack) + (yy_buffer_stack_max), 0, grow_size * sizeof(struct yy_buffer_state*));
+@@ -1943,13 +2023,13 @@ static void zconfensure_buffer_stack (void)
+ /** Setup the input buffer state to scan directly from a user-specified character buffer.
+  * @param base the character buffer
+  * @param size the size in bytes of the character buffer
+- *
+- * @return the newly allocated buffer state object.
++ * 
++ * @return the newly allocated buffer state object. 
+  */
+ YY_BUFFER_STATE zconf_scan_buffer  (char * base, yy_size_t  size )
+ {
+ 	YY_BUFFER_STATE b;
+-
++    
+ 	if ( size < 2 ||
+ 	     base[size-2] != YY_END_OF_BUFFER_CHAR ||
+ 	     base[size-1] != YY_END_OF_BUFFER_CHAR )
+@@ -1977,42 +2057,42 @@ YY_BUFFER_STATE zconf_scan_buffer  (char * base, yy_size_t  size )
+ 
+ /** Setup the input buffer state to scan a string. The next call to zconflex() will
+  * scan from a @e copy of @a str.
+- * @param yy_str a NUL-terminated string to scan
+- *
++ * @param yystr a NUL-terminated string to scan
++ * 
+  * @return the newly allocated buffer state object.
+  * @note If you want to scan bytes that may contain NUL values, then use
+  *       zconf_scan_bytes() instead.
+  */
+-YY_BUFFER_STATE zconf_scan_string (yyconst char * yy_str )
++YY_BUFFER_STATE zconf_scan_string (yyconst char * yystr )
+ {
+-
+-	return zconf_scan_bytes(yy_str,strlen(yy_str) );
++    
++	return zconf_scan_bytes(yystr,strlen(yystr) );
+ }
+ 
+ /** Setup the input buffer state to scan the given bytes. The next call to zconflex() will
+  * scan from a @e copy of @a bytes.
+- * @param bytes the byte buffer to scan
+- * @param len the number of bytes in the buffer pointed to by @a bytes.
+- *
++ * @param yybytes the byte buffer to scan
++ * @param _yybytes_len the number of bytes in the buffer pointed to by @a bytes.
++ * 
+  * @return the newly allocated buffer state object.
+  */
+-YY_BUFFER_STATE zconf_scan_bytes  (yyconst char * bytes, int  len )
++YY_BUFFER_STATE zconf_scan_bytes  (yyconst char * yybytes, int  _yybytes_len )
+ {
+ 	YY_BUFFER_STATE b;
+ 	char *buf;
+ 	yy_size_t n;
+ 	int i;
+-
++    
+ 	/* Get memory for full buffer, including space for trailing EOB's. */
+-	n = len + 2;
++	n = _yybytes_len + 2;
+ 	buf = (char *) zconfalloc(n  );
+ 	if ( ! buf )
+ 		YY_FATAL_ERROR( "out of dynamic memory in zconf_scan_bytes()" );
+ 
+-	for ( i = 0; i < len; ++i )
+-		buf[i] = bytes[i];
++	for ( i = 0; i < _yybytes_len; ++i )
++		buf[i] = yybytes[i];
+ 
+-	buf[len] = buf[len+1] = YY_END_OF_BUFFER_CHAR;
++	buf[_yybytes_len] = buf[_yybytes_len+1] = YY_END_OF_BUFFER_CHAR;
+ 
+ 	b = zconf_scan_buffer(buf,n );
+ 	if ( ! b )
+@@ -2056,16 +2136,16 @@ static void yy_fatal_error (yyconst char* msg )
+ /* Accessor  methods (get/set functions) to struct members. */
+ 
+ /** Get the current line number.
+- *
++ * 
+  */
+ int zconfget_lineno  (void)
+ {
+-
++        
+     return zconflineno;
+ }
+ 
+ /** Get the input stream.
+- *
++ * 
+  */
+ FILE *zconfget_in  (void)
+ {
+@@ -2073,7 +2153,7 @@ FILE *zconfget_in  (void)
+ }
+ 
+ /** Get the output stream.
+- *
++ * 
+  */
+ FILE *zconfget_out  (void)
+ {
+@@ -2081,7 +2161,7 @@ FILE *zconfget_out  (void)
+ }
+ 
+ /** Get the length of the current token.
+- *
++ * 
+  */
+ int zconfget_leng  (void)
+ {
+@@ -2089,7 +2169,7 @@ int zconfget_leng  (void)
+ }
+ 
+ /** Get the current token.
+- *
++ * 
+  */
+ 
+ char *zconfget_text  (void)
+@@ -2099,18 +2179,18 @@ char *zconfget_text  (void)
+ 
+ /** Set the current line number.
+  * @param line_number
+- *
++ * 
+  */
+ void zconfset_lineno (int  line_number )
+ {
+-
++    
+     zconflineno = line_number;
+ }
+ 
+ /** Set the input stream. This does not discard the current
+  * input buffer.
+  * @param in_str A readable stream.
+- *
++ * 
+  * @see zconf_switch_to_buffer
+  */
+ void zconfset_in (FILE *  in_str )
+@@ -2133,10 +2213,38 @@ void zconfset_debug (int  bdebug )
+         zconf_flex_debug = bdebug ;
+ }
+ 
++static int yy_init_globals (void)
++{
++        /* Initialization is the same as for the non-reentrant scanner.
++     * This function is called from zconflex_destroy(), so don't allocate here.
++     */
++
++    (yy_buffer_stack) = 0;
++    (yy_buffer_stack_top) = 0;
++    (yy_buffer_stack_max) = 0;
++    (yy_c_buf_p) = (char *) 0;
++    (yy_init) = 0;
++    (yy_start) = 0;
++
++/* Defined in main.c */
++#ifdef YY_STDINIT
++    zconfin = stdin;
++    zconfout = stdout;
++#else
++    zconfin = (FILE *) 0;
++    zconfout = (FILE *) 0;
++#endif
++
++    /* For future reference: Set errno on error, since we are called by
++     * zconflex_init()
++     */
++    return 0;
++}
++
+ /* zconflex_destroy is for both reentrant and non-reentrant scanners. */
+ int zconflex_destroy  (void)
+ {
+-
++    
+     /* Pop the buffer stack, destroying each element. */
+ 	while(YY_CURRENT_BUFFER){
+ 		zconf_delete_buffer(YY_CURRENT_BUFFER  );
+@@ -2148,6 +2256,10 @@ int zconflex_destroy  (void)
+ 	zconffree((yy_buffer_stack) );
+ 	(yy_buffer_stack) = NULL;
+ 
++    /* Reset the globals. This is important in a non-reentrant scanner so the next time
++     * zconflex() is called, initialization will occur. */
++    yy_init_globals( );
++
+     return 0;
+ }
+ 
+@@ -2159,7 +2271,7 @@ int zconflex_destroy  (void)
+ static void yy_flex_strncpy (char* s1, yyconst char * s2, int n )
+ {
+ 	register int i;
+-    	for ( i = 0; i < n; ++i )
++	for ( i = 0; i < n; ++i )
+ 		s1[i] = s2[i];
+ }
+ #endif
+@@ -2168,7 +2280,7 @@ static void yy_flex_strncpy (char* s1, yyconst char * s2, int n )
+ static int yy_flex_strlen (yyconst char * s )
+ {
+ 	register int n;
+-    	for ( n = 0; s[n]; ++n )
++	for ( n = 0; s[n]; ++n )
+ 		;
+ 
+ 	return n;
+@@ -2199,19 +2311,6 @@ void zconffree (void * ptr )
+ 
+ #define YYTABLES_NAME "yytables"
+ 
+-#undef YY_NEW_FILE
+-#undef YY_FLUSH_BUFFER
+-#undef yy_set_bol
+-#undef yy_new_buffer
+-#undef yy_set_interactive
+-#undef yytext_ptr
+-#undef YY_DO_BEFORE_ACTION
+-
+-#ifdef YY_DECL_IS_OURS
+-#undef YY_DECL_IS_OURS
+-#undef YY_DECL
+-#endif
+-
+ void zconf_starthelp(void)
+ {
+ 	new_string();
+@@ -2235,13 +2334,14 @@ static void zconf_endhelp(void)
+  */
+ FILE *zconf_fopen(const char *name)
+ {
+-	char *env, fullname[PATH_MAX+1];
++	char *env;
+ 	FILE *f;
+ 
+ 	f = fopen(name, "r");
+ 	if (!f && name[0] != '/') {
+ 		env = getenv(SRCTREE);
+ 		if (env) {
++			char *fullname = alloca(strlen(env) + strlen(name) + 2);
+ 			sprintf(fullname, "%s/%s", env, name);
+ 			f = fopen(fullname, "r");
+ 		}
+diff --git a/scripts/kconfig/zconf.hash.c_shipped b/scripts/kconfig/zconf.hash.c_shipped
+index 345f0fc..e5da943 100644
+--- a/scripts/kconfig/zconf.hash.c_shipped
++++ b/scripts/kconfig/zconf.hash.c_shipped
+@@ -1,4 +1,4 @@
+-/* ANSI-C code produced by gperf version 3.0.1 */
++/* ANSI-C code produced by gperf version 3.0.3 */
+ /* Command-line: gperf  */
+ /* Computed positions: -k'1,3' */
+ 
+@@ -155,6 +155,9 @@ static struct kconf_id_strings_t kconf_id_strings_contents =
+ #define kconf_id_strings ((const char *) &kconf_id_strings_contents)
+ #ifdef __GNUC__
+ __inline
++#ifdef __GNUC_STDC_INLINE__
++__attribute__ ((__gnu_inline__))
++#endif
+ #endif
+ struct kconf_id *
+ kconf_id_lookup (register const char *str, register unsigned int len)
+diff --git a/scripts/kconfig/zconf.tab.c_shipped b/scripts/kconfig/zconf.tab.c_shipped
+index b62724d..818260f 100644
+--- a/scripts/kconfig/zconf.tab.c_shipped
++++ b/scripts/kconfig/zconf.tab.c_shipped
+@@ -1,30 +1,39 @@
+-/* A Bison parser, made by GNU Bison 2.0.  */
+ 
+-/* Skeleton parser for Yacc-like parsing with Bison,
+-   Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004 Free Software Foundation, Inc.
++/* A Bison parser, made by GNU Bison 2.4.1.  */
+ 
+-   This program is free software; you can redistribute it and/or modify
++/* Skeleton implementation for Bison's Yacc-like parsers in C
++   
++      Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004, 2005, 2006
++   Free Software Foundation, Inc.
++   
++   This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+-   the Free Software Foundation; either version 2, or (at your option)
+-   any later version.
+-
++   the Free Software Foundation, either version 3 of the License, or
++   (at your option) any later version.
++   
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+-
++   
+    You should have received a copy of the GNU General Public License
+-   along with this program; if not, write to the Free Software
+-   Foundation, Inc., 59 Temple Place - Suite 330,
+-   Boston, MA 02111-1307, USA.  */
+-
+-/* As a special exception, when this file is copied by Bison into a
+-   Bison output file, you may use that output file without restriction.
+-   This special exception was added by the Free Software Foundation
+-   in version 1.24 of Bison.  */
+-
+-/* Written by Richard Stallman by simplifying the original so called
+-   ``semantic'' parser.  */
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++/* As a special exception, you may create a larger work that contains
++   part or all of the Bison parser skeleton and distribute that work
++   under terms of your choice, so long as that work isn't itself a
++   parser generator using the skeleton or a modified version thereof
++   as a parser skeleton.  Alternatively, if you modify or redistribute
++   the parser skeleton itself, you may (at your option) remove this
++   special exception, which will cause the skeleton and the resulting
++   Bison output files to be licensed under the GNU General Public
++   License without this special exception.
++   
++   This special exception was added by the Free Software Foundation in
++   version 2.2 of Bison.  */
++
++/* C LALR(1) parser skeleton written by Richard Stallman, by
++   simplifying the original so-called "semantic" parser.  */
+ 
+ /* All symbols defined below should begin with yy or YY, to avoid
+    infringing on user name space.  This should be done even for local
+@@ -36,99 +45,32 @@
+ /* Identify Bison output.  */
+ #define YYBISON 1
+ 
++/* Bison version.  */
++#define YYBISON_VERSION "2.4.1"
++
+ /* Skeleton name.  */
+ #define YYSKELETON_NAME "yacc.c"
+ 
+ /* Pure parsers.  */
+ #define YYPURE 0
+ 
++/* Push parsers.  */
++#define YYPUSH 0
++
++/* Pull parsers.  */
++#define YYPULL 1
++
+ /* Using locations.  */
+ #define YYLSP_NEEDED 0
+ 
+ /* Substitute the variable and function names.  */
+-#define yyparse zconfparse
+-#define yylex   zconflex
+-#define yyerror zconferror
+-#define yylval  zconflval
+-#define yychar  zconfchar
+-#define yydebug zconfdebug
+-#define yynerrs zconfnerrs
+-
+-
+-/* Tokens.  */
+-#ifndef YYTOKENTYPE
+-# define YYTOKENTYPE
+-   /* Put the tokens into the symbol table, so that GDB and other debuggers
+-      know about them.  */
+-   enum yytokentype {
+-     T_MAINMENU = 258,
+-     T_MENU = 259,
+-     T_ENDMENU = 260,
+-     T_SOURCE = 261,
+-     T_CHOICE = 262,
+-     T_ENDCHOICE = 263,
+-     T_COMMENT = 264,
+-     T_CONFIG = 265,
+-     T_MENUCONFIG = 266,
+-     T_HELP = 267,
+-     T_HELPTEXT = 268,
+-     T_IF = 269,
+-     T_ENDIF = 270,
+-     T_DEPENDS = 271,
+-     T_REQUIRES = 272,
+-     T_OPTIONAL = 273,
+-     T_PROMPT = 274,
+-     T_TYPE = 275,
+-     T_DEFAULT = 276,
+-     T_SELECT = 277,
+-     T_RANGE = 278,
+-     T_ON = 279,
+-     T_WORD = 280,
+-     T_WORD_QUOTE = 281,
+-     T_UNEQUAL = 282,
+-     T_CLOSE_PAREN = 283,
+-     T_OPEN_PAREN = 284,
+-     T_EOL = 285,
+-     T_OR = 286,
+-     T_AND = 287,
+-     T_EQUAL = 288,
+-     T_NOT = 289
+-   };
+-#endif
+-#define T_MAINMENU 258
+-#define T_MENU 259
+-#define T_ENDMENU 260
+-#define T_SOURCE 261
+-#define T_CHOICE 262
+-#define T_ENDCHOICE 263
+-#define T_COMMENT 264
+-#define T_CONFIG 265
+-#define T_MENUCONFIG 266
+-#define T_HELP 267
+-#define T_HELPTEXT 268
+-#define T_IF 269
+-#define T_ENDIF 270
+-#define T_DEPENDS 271
+-#define T_REQUIRES 272
+-#define T_OPTIONAL 273
+-#define T_PROMPT 274
+-#define T_TYPE 275
+-#define T_DEFAULT 276
+-#define T_SELECT 277
+-#define T_RANGE 278
+-#define T_ON 279
+-#define T_WORD 280
+-#define T_WORD_QUOTE 281
+-#define T_UNEQUAL 282
+-#define T_CLOSE_PAREN 283
+-#define T_OPEN_PAREN 284
+-#define T_EOL 285
+-#define T_OR 286
+-#define T_AND 287
+-#define T_EQUAL 288
+-#define T_NOT 289
+-
+-
++#define yyparse         zconfparse
++#define yylex           zconflex
++#define yyerror         zconferror
++#define yylval          zconflval
++#define yychar          zconfchar
++#define yydebug         zconfdebug
++#define yynerrs         zconfnerrs
+ 
+ 
+ /* Copy the first part of user declarations.  */
+@@ -149,8 +91,6 @@
+ #define LKC_DIRECT_LINK
+ #include "lkc.h"
+ 
+-#include "zconf.hash.c"
+-
+ #define printd(mask, fmt...) if (cdebug & (mask)) printf(fmt)
+ 
+ #define PRINTD		0x0001
+@@ -174,6 +114,7 @@ static struct menu *current_menu, *current_entry;
+ #endif
+ 
+ 
++
+ /* Enabling traces.  */
+ #ifndef YYDEBUG
+ # define YYDEBUG 0
+@@ -187,39 +128,168 @@ static struct menu *current_menu, *current_entry;
+ # define YYERROR_VERBOSE 0
+ #endif
+ 
+-#if ! defined (YYSTYPE) && ! defined (YYSTYPE_IS_DECLARED)
++/* Enabling the token table.  */
++#ifndef YYTOKEN_TABLE
++# define YYTOKEN_TABLE 0
++#endif
++
++
++/* Tokens.  */
++#ifndef YYTOKENTYPE
++# define YYTOKENTYPE
++   /* Put the tokens into the symbol table, so that GDB and other debuggers
++      know about them.  */
++   enum yytokentype {
++     T_MAINMENU = 258,
++     T_MENU = 259,
++     T_ENDMENU = 260,
++     T_SOURCE = 261,
++     T_CHOICE = 262,
++     T_ENDCHOICE = 263,
++     T_COMMENT = 264,
++     T_CONFIG = 265,
++     T_MENUCONFIG = 266,
++     T_HELP = 267,
++     T_HELPTEXT = 268,
++     T_IF = 269,
++     T_ENDIF = 270,
++     T_DEPENDS = 271,
++     T_REQUIRES = 272,
++     T_OPTIONAL = 273,
++     T_PROMPT = 274,
++     T_TYPE = 275,
++     T_DEFAULT = 276,
++     T_SELECT = 277,
++     T_RANGE = 278,
++     T_ON = 279,
++     T_WORD = 280,
++     T_WORD_QUOTE = 281,
++     T_UNEQUAL = 282,
++     T_CLOSE_PAREN = 283,
++     T_OPEN_PAREN = 284,
++     T_EOL = 285,
++     T_OR = 286,
++     T_AND = 287,
++     T_EQUAL = 288,
++     T_NOT = 289
++   };
++#endif
++
++
++
++#if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
++typedef union YYSTYPE
++{
++
+ 
+-typedef union YYSTYPE {
+ 	char *string;
+ 	struct file *file;
+ 	struct symbol *symbol;
+ 	struct expr *expr;
+ 	struct menu *menu;
+ 	struct kconf_id *id;
+-} YYSTYPE;
+-/* Line 190 of yacc.c.  */
+ 
++
++
++} YYSTYPE;
++# define YYSTYPE_IS_TRIVIAL 1
+ # define yystype YYSTYPE /* obsolescent; will be withdrawn */
+ # define YYSTYPE_IS_DECLARED 1
+-# define YYSTYPE_IS_TRIVIAL 1
+ #endif
+ 
+ 
+-
+ /* Copy the second part of user declarations.  */
+ 
+ 
+-/* Line 213 of yacc.c.  */
++#include "zconf.hash.c"
++
++
++
++#ifdef short
++# undef short
++#endif
++
++#ifdef YYTYPE_UINT8
++typedef YYTYPE_UINT8 yytype_uint8;
++#else
++typedef unsigned char yytype_uint8;
++#endif
++
++#ifdef YYTYPE_INT8
++typedef YYTYPE_INT8 yytype_int8;
++#elif (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++typedef signed char yytype_int8;
++#else
++typedef short int yytype_int8;
++#endif
+ 
++#ifdef YYTYPE_UINT16
++typedef YYTYPE_UINT16 yytype_uint16;
++#else
++typedef unsigned short int yytype_uint16;
++#endif
+ 
+-#if ! defined (yyoverflow) || YYERROR_VERBOSE
++#ifdef YYTYPE_INT16
++typedef YYTYPE_INT16 yytype_int16;
++#else
++typedef short int yytype_int16;
++#endif
+ 
+-# ifndef YYFREE
+-#  define YYFREE free
++#ifndef YYSIZE_T
++# ifdef __SIZE_TYPE__
++#  define YYSIZE_T __SIZE_TYPE__
++# elif defined size_t
++#  define YYSIZE_T size_t
++# elif ! defined YYSIZE_T && (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++#  include <stddef.h> /* INFRINGES ON USER NAME SPACE */
++#  define YYSIZE_T size_t
++# else
++#  define YYSIZE_T unsigned int
+ # endif
+-# ifndef YYMALLOC
+-#  define YYMALLOC malloc
++#endif
++
++#define YYSIZE_MAXIMUM ((YYSIZE_T) -1)
++
++#ifndef YY_
++# if YYENABLE_NLS
++#  if ENABLE_NLS
++#   include <libintl.h> /* INFRINGES ON USER NAME SPACE */
++#   define YY_(msgid) dgettext ("bison-runtime", msgid)
++#  endif
+ # endif
++# ifndef YY_
++#  define YY_(msgid) msgid
++# endif
++#endif
++
++/* Suppress unused-variable warnings by "using" E.  */
++#if ! defined lint || defined __GNUC__
++# define YYUSE(e) ((void) (e))
++#else
++# define YYUSE(e) /* empty */
++#endif
++
++/* Identity function, used to suppress warnings about constant conditions.  */
++#ifndef lint
++# define YYID(n) (n)
++#else
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++static int
++YYID (int yyi)
++#else
++static int
++YYID (yyi)
++    int yyi;
++#endif
++{
++  return yyi;
++}
++#endif
++
++#if ! defined yyoverflow || YYERROR_VERBOSE
+ 
+ /* The parser invokes alloca or malloc; define the necessary symbols.  */
+ 
+@@ -227,36 +297,78 @@ typedef union YYSTYPE {
+ #  if YYSTACK_USE_ALLOCA
+ #   ifdef __GNUC__
+ #    define YYSTACK_ALLOC __builtin_alloca
++#   elif defined __BUILTIN_VA_ARG_INCR
++#    include <alloca.h> /* INFRINGES ON USER NAME SPACE */
++#   elif defined _AIX
++#    define YYSTACK_ALLOC __alloca
++#   elif defined _MSC_VER
++#    include <malloc.h> /* INFRINGES ON USER NAME SPACE */
++#    define alloca _alloca
+ #   else
+ #    define YYSTACK_ALLOC alloca
++#    if ! defined _ALLOCA_H && ! defined _STDLIB_H && (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++#     include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
++#     ifndef _STDLIB_H
++#      define _STDLIB_H 1
++#     endif
++#    endif
+ #   endif
+ #  endif
+ # endif
+ 
+ # ifdef YYSTACK_ALLOC
+-   /* Pacify GCC's `empty if-body' warning. */
+-#  define YYSTACK_FREE(Ptr) do { /* empty */; } while (0)
+-# else
+-#  if defined (__STDC__) || defined (__cplusplus)
+-#   include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
+-#   define YYSIZE_T size_t
++   /* Pacify GCC's `empty if-body' warning.  */
++#  define YYSTACK_FREE(Ptr) do { /* empty */; } while (YYID (0))
++#  ifndef YYSTACK_ALLOC_MAXIMUM
++    /* The OS might guarantee only one guard page at the bottom of the stack,
++       and a page size can be as small as 4096 bytes.  So we cannot safely
++       invoke alloca (N) if N exceeds 4096.  Use a slightly smaller number
++       to allow for a few compiler-allocated temporary stack slots.  */
++#   define YYSTACK_ALLOC_MAXIMUM 4032 /* reasonable circa 2006 */
+ #  endif
++# else
+ #  define YYSTACK_ALLOC YYMALLOC
+ #  define YYSTACK_FREE YYFREE
++#  ifndef YYSTACK_ALLOC_MAXIMUM
++#   define YYSTACK_ALLOC_MAXIMUM YYSIZE_MAXIMUM
++#  endif
++#  if (defined __cplusplus && ! defined _STDLIB_H \
++       && ! ((defined YYMALLOC || defined malloc) \
++	     && (defined YYFREE || defined free)))
++#   include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
++#   ifndef _STDLIB_H
++#    define _STDLIB_H 1
++#   endif
++#  endif
++#  ifndef YYMALLOC
++#   define YYMALLOC malloc
++#   if ! defined malloc && ! defined _STDLIB_H && (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++void *malloc (YYSIZE_T); /* INFRINGES ON USER NAME SPACE */
++#   endif
++#  endif
++#  ifndef YYFREE
++#   define YYFREE free
++#   if ! defined free && ! defined _STDLIB_H && (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++void free (void *); /* INFRINGES ON USER NAME SPACE */
++#   endif
++#  endif
+ # endif
+-#endif /* ! defined (yyoverflow) || YYERROR_VERBOSE */
++#endif /* ! defined yyoverflow || YYERROR_VERBOSE */
+ 
+ 
+-#if (! defined (yyoverflow) \
+-     && (! defined (__cplusplus) \
+-	 || (defined (YYSTYPE_IS_TRIVIAL) && YYSTYPE_IS_TRIVIAL)))
++#if (! defined yyoverflow \
++     && (! defined __cplusplus \
++	 || (defined YYSTYPE_IS_TRIVIAL && YYSTYPE_IS_TRIVIAL)))
+ 
+ /* A type that is properly aligned for any stack member.  */
+ union yyalloc
+ {
+-  short int yyss;
+-  YYSTYPE yyvs;
+-  };
++  yytype_int16 yyss_alloc;
++  YYSTYPE yyvs_alloc;
++};
+ 
+ /* The size of the maximum gap between one aligned stack and the next.  */
+ # define YYSTACK_GAP_MAXIMUM (sizeof (union yyalloc) - 1)
+@@ -264,24 +376,24 @@ union yyalloc
+ /* The size of an array large to enough to hold all stacks, each with
+    N elements.  */
+ # define YYSTACK_BYTES(N) \
+-     ((N) * (sizeof (short int) + sizeof (YYSTYPE))			\
++     ((N) * (sizeof (yytype_int16) + sizeof (YYSTYPE)) \
+       + YYSTACK_GAP_MAXIMUM)
+ 
+ /* Copy COUNT objects from FROM to TO.  The source and destination do
+    not overlap.  */
+ # ifndef YYCOPY
+-#  if defined (__GNUC__) && 1 < __GNUC__
++#  if defined __GNUC__ && 1 < __GNUC__
+ #   define YYCOPY(To, From, Count) \
+       __builtin_memcpy (To, From, (Count) * sizeof (*(From)))
+ #  else
+ #   define YYCOPY(To, From, Count)		\
+       do					\
+ 	{					\
+-	  register YYSIZE_T yyi;		\
++	  YYSIZE_T yyi;				\
+ 	  for (yyi = 0; yyi < (Count); yyi++)	\
+ 	    (To)[yyi] = (From)[yyi];		\
+ 	}					\
+-      while (0)
++      while (YYID (0))
+ #  endif
+ # endif
+ 
+@@ -290,48 +402,42 @@ union yyalloc
+    elements in the stack, and YYPTR gives the new location of the
+    stack.  Advance YYPTR to a properly aligned location for the next
+    stack.  */
+-# define YYSTACK_RELOCATE(Stack)					\
++# define YYSTACK_RELOCATE(Stack_alloc, Stack)				\
+     do									\
+       {									\
+ 	YYSIZE_T yynewbytes;						\
+-	YYCOPY (&yyptr->Stack, Stack, yysize);				\
+-	Stack = &yyptr->Stack;						\
++	YYCOPY (&yyptr->Stack_alloc, Stack, yysize);			\
++	Stack = &yyptr->Stack_alloc;					\
+ 	yynewbytes = yystacksize * sizeof (*Stack) + YYSTACK_GAP_MAXIMUM; \
+ 	yyptr += yynewbytes / sizeof (*yyptr);				\
+       }									\
+-    while (0)
++    while (YYID (0))
+ 
+ #endif
+ 
+-#if defined (__STDC__) || defined (__cplusplus)
+-   typedef signed char yysigned_char;
+-#else
+-   typedef short int yysigned_char;
+-#endif
+-
+-/* YYFINAL -- State number of the termination state. */
++/* YYFINAL -- State number of the termination state.  */
+ #define YYFINAL  3
+ /* YYLAST -- Last index in YYTABLE.  */
+ #define YYLAST   264
+ 
+-/* YYNTOKENS -- Number of terminals. */
++/* YYNTOKENS -- Number of terminals.  */
+ #define YYNTOKENS  35
+-/* YYNNTS -- Number of nonterminals. */
++/* YYNNTS -- Number of nonterminals.  */
+ #define YYNNTS  42
+-/* YYNRULES -- Number of rules. */
++/* YYNRULES -- Number of rules.  */
+ #define YYNRULES  104
+-/* YYNRULES -- Number of states. */
++/* YYNRULES -- Number of states.  */
+ #define YYNSTATES  175
+ 
+ /* YYTRANSLATE(YYLEX) -- Bison symbol number corresponding to YYLEX.  */
+ #define YYUNDEFTOK  2
+ #define YYMAXUTOK   289
+ 
+-#define YYTRANSLATE(YYX) 						\
++#define YYTRANSLATE(YYX)						\
+   ((unsigned int) (YYX) <= YYMAXUTOK ? yytranslate[YYX] : YYUNDEFTOK)
+ 
+ /* YYTRANSLATE[YYLEX] -- Bison symbol number corresponding to YYLEX.  */
+-static const unsigned char yytranslate[] =
++static const yytype_uint8 yytranslate[] =
+ {
+        0,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+@@ -367,7 +473,7 @@ static const unsigned char yytranslate[] =
+ #if YYDEBUG
+ /* YYPRHS[YYN] -- Index of the first RHS symbol of rule number YYN in
+    YYRHS.  */
+-static const unsigned short int yyprhs[] =
++static const yytype_uint16 yyprhs[] =
+ {
+        0,     0,     3,     5,     6,     9,    12,    15,    20,    23,
+       28,    33,    37,    39,    41,    43,    45,    47,    49,    51,
+@@ -382,8 +488,8 @@ static const unsigned short int yyprhs[] =
+      297,   300,   304,   308,   310
+ };
+ 
+-/* YYRHS -- A `-1'-separated list of the rules' RHS. */
+-static const yysigned_char yyrhs[] =
++/* YYRHS -- A `-1'-separated list of the rules' RHS.  */
++static const yytype_int8 yyrhs[] =
+ {
+       36,     0,    -1,    37,    -1,    -1,    37,    39,    -1,    37,
+       50,    -1,    37,    61,    -1,    37,     3,    71,    73,    -1,
+@@ -420,25 +526,25 @@ static const yysigned_char yyrhs[] =
+ };
+ 
+ /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
+-static const unsigned short int yyrline[] =
++static const yytype_uint16 yyrline[] =
+ {
+-       0,   103,   103,   105,   107,   108,   109,   110,   111,   112,
+-     113,   117,   121,   121,   121,   121,   121,   121,   121,   125,
+-     126,   127,   128,   129,   130,   134,   135,   141,   149,   155,
+-     163,   173,   175,   176,   177,   178,   179,   182,   190,   196,
+-     206,   212,   220,   229,   234,   242,   245,   247,   248,   249,
+-     250,   251,   254,   260,   271,   277,   287,   289,   294,   302,
+-     310,   313,   315,   316,   317,   322,   329,   334,   342,   345,
+-     347,   348,   349,   352,   360,   367,   374,   380,   387,   389,
+-     390,   391,   394,   399,   404,   412,   414,   419,   420,   423,
+-     424,   425,   429,   430,   433,   434,   437,   438,   439,   440,
+-     441,   442,   443,   446,   447
++       0,   105,   105,   107,   109,   110,   111,   112,   113,   114,
++     115,   119,   123,   123,   123,   123,   123,   123,   123,   127,
++     128,   129,   130,   131,   132,   136,   137,   143,   151,   157,
++     165,   175,   177,   178,   179,   180,   181,   184,   192,   198,
++     208,   214,   222,   231,   236,   244,   247,   249,   250,   251,
++     252,   253,   256,   262,   273,   279,   289,   291,   296,   304,
++     312,   315,   317,   318,   319,   324,   331,   336,   344,   347,
++     349,   350,   351,   354,   362,   369,   376,   382,   389,   391,
++     392,   393,   396,   401,   406,   414,   416,   421,   422,   425,
++     426,   427,   431,   432,   435,   436,   439,   440,   441,   442,
++     443,   444,   445,   448,   449
+ };
+ #endif
+ 
+-#if YYDEBUG || YYERROR_VERBOSE
+-/* YYTNME[SYMBOL-NUM] -- String name of the symbol SYMBOL-NUM.
+-   First, the terminals, then, starting at YYNTOKENS, nonterminals. */
++#if YYDEBUG || YYERROR_VERBOSE || YYTOKEN_TABLE
++/* YYTNAME[SYMBOL-NUM] -- String name of the symbol SYMBOL-NUM.
++   First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
+ static const char *const yytname[] =
+ {
+   "$end", "error", "$undefined", "T_MAINMENU", "T_MENU", "T_ENDMENU",
+@@ -462,7 +568,7 @@ static const char *const yytname[] =
+ # ifdef YYPRINT
+ /* YYTOKNUM[YYLEX-NUM] -- Internal token number corresponding to
+    token YYLEX-NUM.  */
+-static const unsigned short int yytoknum[] =
++static const yytype_uint16 yytoknum[] =
+ {
+        0,   256,   257,   258,   259,   260,   261,   262,   263,   264,
+      265,   266,   267,   268,   269,   270,   271,   272,   273,   274,
+@@ -472,7 +578,7 @@ static const unsigned short int yytoknum[] =
+ # endif
+ 
+ /* YYR1[YYN] -- Symbol number of symbol that rule YYN derives.  */
+-static const unsigned char yyr1[] =
++static const yytype_uint8 yyr1[] =
+ {
+        0,    35,    36,    37,    37,    37,    37,    37,    37,    37,
+       37,    37,    38,    38,    38,    38,    38,    38,    38,    39,
+@@ -488,7 +594,7 @@ static const unsigned char yyr1[] =
+ };
+ 
+ /* YYR2[YYN] -- Number of symbols composing right hand side of rule YYN.  */
+-static const unsigned char yyr2[] =
++static const yytype_uint8 yyr2[] =
+ {
+        0,     2,     1,     0,     2,     2,     2,     4,     2,     4,
+        4,     3,     1,     1,     1,     1,     1,     1,     1,     1,
+@@ -506,7 +612,7 @@ static const unsigned char yyr2[] =
+ /* YYDEFACT[STATE-NAME] -- Default rule to reduce with in state
+    STATE-NUM when YYTABLE doesn't specify something else to do.  Zero
+    means the default is an error.  */
+-static const unsigned char yydefact[] =
++static const yytype_uint8 yydefact[] =
+ {
+        3,     0,     0,     1,     0,     0,     0,     0,     0,     0,
+        0,     0,     0,     0,     0,     0,    12,    16,    13,    14,
+@@ -528,8 +634,8 @@ static const unsigned char yydefact[] =
+       40,     0,    52,    55,    41
+ };
+ 
+-/* YYDEFGOTO[NTERM-NUM]. */
+-static const short int yydefgoto[] =
++/* YYDEFGOTO[NTERM-NUM].  */
++static const yytype_int16 yydefgoto[] =
+ {
+       -1,     1,     2,    25,    26,    99,    27,    28,    29,    30,
+       64,   100,    31,    32,   114,    33,    66,   110,    67,    34,
+@@ -541,7 +647,7 @@ static const short int yydefgoto[] =
+ /* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
+    STATE-NUM.  */
+ #define YYPACT_NINF -78
+-static const short int yypact[] =
++static const yytype_int16 yypact[] =
+ {
+      -78,     2,   159,   -78,   -21,     0,     0,   -12,     0,     1,
+        4,     0,    27,    38,    60,    58,   -78,   -78,   -78,   -78,
+@@ -564,7 +670,7 @@ static const short int yypact[] =
+ };
+ 
+ /* YYPGOTO[NTERM-NUM].  */
+-static const short int yypgoto[] =
++static const yytype_int16 yypgoto[] =
+ {
+      -78,   -78,   -78,   -78,   164,   -36,   -78,   -78,   -78,   -78,
+      230,   -78,   -78,   -78,   -78,    29,   -78,   -78,   -78,   -78,
+@@ -578,7 +684,7 @@ static const short int yypgoto[] =
+    number is the opposite.  If zero, do what YYDEFACT says.
+    If YYTABLE_NINF, syntax error.  */
+ #define YYTABLE_NINF -76
+-static const short int yytable[] =
++static const yytype_int16 yytable[] =
+ {
+       46,    47,     3,    49,    79,    80,    52,   133,   134,    43,
+        6,     7,     8,     9,    10,    11,    12,    13,    48,   145,
+@@ -609,7 +715,7 @@ static const short int yytable[] =
+       71,    83,     0,   150,   111
+ };
+ 
+-static const short int yycheck[] =
++static const yytype_int16 yycheck[] =
+ {
+        5,     6,     0,     8,    57,    58,    11,    84,    85,    30,
+        4,     5,     6,     7,     8,     9,    10,    11,    30,    96,
+@@ -642,7 +748,7 @@ static const short int yycheck[] =
+ 
+ /* YYSTOS[STATE-NUM] -- The (internal number of the) accessing
+    symbol of state STATE-NUM.  */
+-static const unsigned char yystos[] =
++static const yytype_uint8 yystos[] =
+ {
+        0,    36,    37,     0,     1,     3,     4,     5,     6,     7,
+        8,     9,    10,    11,    14,    15,    16,    18,    19,    20,
+@@ -664,22 +770,6 @@ static const unsigned char yystos[] =
+       30,    74,    30,    30,    30
+ };
+ 
+-#if ! defined (YYSIZE_T) && defined (__SIZE_TYPE__)
+-# define YYSIZE_T __SIZE_TYPE__
+-#endif
+-#if ! defined (YYSIZE_T) && defined (size_t)
+-# define YYSIZE_T size_t
+-#endif
+-#if ! defined (YYSIZE_T)
+-# if defined (__STDC__) || defined (__cplusplus)
+-#  include <stddef.h> /* INFRINGES ON USER NAME SPACE */
+-#  define YYSIZE_T size_t
+-# endif
+-#endif
+-#if ! defined (YYSIZE_T)
+-# define YYSIZE_T unsigned int
+-#endif
+-
+ #define yyerrok		(yyerrstatus = 0)
+ #define yyclearin	(yychar = YYEMPTY)
+ #define YYEMPTY		(-2)
+@@ -705,15 +795,15 @@ do								\
+       yychar = (Token);						\
+       yylval = (Value);						\
+       yytoken = YYTRANSLATE (yychar);				\
+-      YYPOPSTACK;						\
++      YYPOPSTACK (1);						\
+       goto yybackup;						\
+     }								\
+   else								\
+-    { 								\
+-      yyerror ("syntax error: cannot back up");\
++    {								\
++      yyerror (YY_("syntax error: cannot back up")); \
+       YYERROR;							\
+     }								\
+-while (0)
++while (YYID (0))
+ 
+ 
+ #define YYTERROR	1
+@@ -728,7 +818,7 @@ while (0)
+ #ifndef YYLLOC_DEFAULT
+ # define YYLLOC_DEFAULT(Current, Rhs, N)				\
+     do									\
+-      if (N)								\
++      if (YYID (N))                                                    \
+ 	{								\
+ 	  (Current).first_line   = YYRHSLOC (Rhs, 1).first_line;	\
+ 	  (Current).first_column = YYRHSLOC (Rhs, 1).first_column;	\
+@@ -742,7 +832,7 @@ while (0)
+ 	  (Current).first_column = (Current).last_column =		\
+ 	    YYRHSLOC (Rhs, 0).last_column;				\
+ 	}								\
+-    while (0)
++    while (YYID (0))
+ #endif
+ 
+ 
+@@ -754,8 +844,8 @@ while (0)
+ # if YYLTYPE_IS_TRIVIAL
+ #  define YY_LOCATION_PRINT(File, Loc)			\
+      fprintf (File, "%d.%d-%d.%d",			\
+-              (Loc).first_line, (Loc).first_column,	\
+-              (Loc).last_line,  (Loc).last_column)
++	      (Loc).first_line, (Loc).first_column,	\
++	      (Loc).last_line,  (Loc).last_column)
+ # else
+ #  define YY_LOCATION_PRINT(File, Loc) ((void) 0)
+ # endif
+@@ -782,37 +872,100 @@ while (0)
+ do {						\
+   if (yydebug)					\
+     YYFPRINTF Args;				\
+-} while (0)
++} while (YYID (0))
+ 
+-# define YY_SYMBOL_PRINT(Title, Type, Value, Location)		\
+-do {								\
+-  if (yydebug)							\
+-    {								\
+-      YYFPRINTF (stderr, "%s ", Title);				\
+-      yysymprint (stderr, 					\
+-                  Type, Value);	\
+-      YYFPRINTF (stderr, "\n");					\
+-    }								\
+-} while (0)
++# define YY_SYMBOL_PRINT(Title, Type, Value, Location)			  \
++do {									  \
++  if (yydebug)								  \
++    {									  \
++      YYFPRINTF (stderr, "%s ", Title);					  \
++      yy_symbol_print (stderr,						  \
++		  Type, Value); \
++      YYFPRINTF (stderr, "\n");						  \
++    }									  \
++} while (YYID (0))
++
++
++/*--------------------------------.
++| Print this symbol on YYOUTPUT.  |
++`--------------------------------*/
++
++/*ARGSUSED*/
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++static void
++yy_symbol_value_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep)
++#else
++static void
++yy_symbol_value_print (yyoutput, yytype, yyvaluep)
++    FILE *yyoutput;
++    int yytype;
++    YYSTYPE const * const yyvaluep;
++#endif
++{
++  if (!yyvaluep)
++    return;
++# ifdef YYPRINT
++  if (yytype < YYNTOKENS)
++    YYPRINT (yyoutput, yytoknum[yytype], *yyvaluep);
++# else
++  YYUSE (yyoutput);
++# endif
++  switch (yytype)
++    {
++      default:
++	break;
++    }
++}
++
++
++/*--------------------------------.
++| Print this symbol on YYOUTPUT.  |
++`--------------------------------*/
++
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++static void
++yy_symbol_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep)
++#else
++static void
++yy_symbol_print (yyoutput, yytype, yyvaluep)
++    FILE *yyoutput;
++    int yytype;
++    YYSTYPE const * const yyvaluep;
++#endif
++{
++  if (yytype < YYNTOKENS)
++    YYFPRINTF (yyoutput, "token %s (", yytname[yytype]);
++  else
++    YYFPRINTF (yyoutput, "nterm %s (", yytname[yytype]);
++
++  yy_symbol_value_print (yyoutput, yytype, yyvaluep);
++  YYFPRINTF (yyoutput, ")");
++}
+ 
+ /*------------------------------------------------------------------.
+ | yy_stack_print -- Print the state stack from its BOTTOM up to its |
+ | TOP (included).                                                   |
+ `------------------------------------------------------------------*/
+ 
+-#if defined (__STDC__) || defined (__cplusplus)
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
+ static void
+-yy_stack_print (short int *bottom, short int *top)
++yy_stack_print (yytype_int16 *yybottom, yytype_int16 *yytop)
+ #else
+ static void
+-yy_stack_print (bottom, top)
+-    short int *bottom;
+-    short int *top;
++yy_stack_print (yybottom, yytop)
++    yytype_int16 *yybottom;
++    yytype_int16 *yytop;
+ #endif
+ {
+   YYFPRINTF (stderr, "Stack now");
+-  for (/* Nothing. */; bottom <= top; ++bottom)
+-    YYFPRINTF (stderr, " %d", *bottom);
++  for (; yybottom <= yytop; yybottom++)
++    {
++      int yybot = *yybottom;
++      YYFPRINTF (stderr, " %d", yybot);
++    }
+   YYFPRINTF (stderr, "\n");
+ }
+ 
+@@ -820,37 +973,45 @@ yy_stack_print (bottom, top)
+ do {								\
+   if (yydebug)							\
+     yy_stack_print ((Bottom), (Top));				\
+-} while (0)
++} while (YYID (0))
+ 
+ 
+ /*------------------------------------------------.
+ | Report that the YYRULE is going to be reduced.  |
+ `------------------------------------------------*/
+ 
+-#if defined (__STDC__) || defined (__cplusplus)
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
+ static void
+-yy_reduce_print (int yyrule)
++yy_reduce_print (YYSTYPE *yyvsp, int yyrule)
+ #else
+ static void
+-yy_reduce_print (yyrule)
++yy_reduce_print (yyvsp, yyrule)
++    YYSTYPE *yyvsp;
+     int yyrule;
+ #endif
+ {
++  int yynrhs = yyr2[yyrule];
+   int yyi;
+-  unsigned int yylno = yyrline[yyrule];
+-  YYFPRINTF (stderr, "Reducing stack by rule %d (line %u), ",
+-             yyrule - 1, yylno);
+-  /* Print the symbols being reduced, and their result.  */
+-  for (yyi = yyprhs[yyrule]; 0 <= yyrhs[yyi]; yyi++)
+-    YYFPRINTF (stderr, "%s ", yytname [yyrhs[yyi]]);
+-  YYFPRINTF (stderr, "-> %s\n", yytname [yyr1[yyrule]]);
++  unsigned long int yylno = yyrline[yyrule];
++  YYFPRINTF (stderr, "Reducing stack by rule %d (line %lu):\n",
++	     yyrule - 1, yylno);
++  /* The symbols being reduced.  */
++  for (yyi = 0; yyi < yynrhs; yyi++)
++    {
++      YYFPRINTF (stderr, "   $%d = ", yyi + 1);
++      yy_symbol_print (stderr, yyrhs[yyprhs[yyrule] + yyi],
++		       &(yyvsp[(yyi + 1) - (yynrhs)])
++		       		       );
++      YYFPRINTF (stderr, "\n");
++    }
+ }
+ 
+ # define YY_REDUCE_PRINT(Rule)		\
+ do {					\
+   if (yydebug)				\
+-    yy_reduce_print (Rule);		\
+-} while (0)
++    yy_reduce_print (yyvsp, Rule); \
++} while (YYID (0))
+ 
+ /* Nonzero means print parse trace.  It is left uninitialized so that
+    multiple parsers can coexist.  */
+@@ -872,7 +1033,7 @@ int yydebug;
+    if the built-in stack extension method is used).
+ 
+    Do not make this value too large; the results are undefined if
+-   SIZE_MAX < YYSTACK_BYTES (YYMAXDEPTH)
++   YYSTACK_ALLOC_MAXIMUM < YYSTACK_BYTES (YYMAXDEPTH)
+    evaluated with infinite-precision integer arithmetic.  */
+ 
+ #ifndef YYMAXDEPTH
+@@ -884,45 +1045,47 @@ int yydebug;
+ #if YYERROR_VERBOSE
+ 
+ # ifndef yystrlen
+-#  if defined (__GLIBC__) && defined (_STRING_H)
++#  if defined __GLIBC__ && defined _STRING_H
+ #   define yystrlen strlen
+ #  else
+ /* Return the length of YYSTR.  */
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
+ static YYSIZE_T
+-#   if defined (__STDC__) || defined (__cplusplus)
+ yystrlen (const char *yystr)
+-#   else
++#else
++static YYSIZE_T
+ yystrlen (yystr)
+-     const char *yystr;
+-#   endif
++    const char *yystr;
++#endif
+ {
+-  register const char *yys = yystr;
+-
+-  while (*yys++ != '\0')
++  YYSIZE_T yylen;
++  for (yylen = 0; yystr[yylen]; yylen++)
+     continue;
+-
+-  return yys - yystr - 1;
++  return yylen;
+ }
+ #  endif
+ # endif
+ 
+ # ifndef yystpcpy
+-#  if defined (__GLIBC__) && defined (_STRING_H) && defined (_GNU_SOURCE)
++#  if defined __GLIBC__ && defined _STRING_H && defined _GNU_SOURCE
+ #   define yystpcpy stpcpy
+ #  else
+ /* Copy YYSRC to YYDEST, returning the address of the terminating '\0' in
+    YYDEST.  */
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
+ static char *
+-#   if defined (__STDC__) || defined (__cplusplus)
+ yystpcpy (char *yydest, const char *yysrc)
+-#   else
++#else
++static char *
+ yystpcpy (yydest, yysrc)
+-     char *yydest;
+-     const char *yysrc;
+-#   endif
++    char *yydest;
++    const char *yysrc;
++#endif
+ {
+-  register char *yyd = yydest;
+-  register const char *yys = yysrc;
++  char *yyd = yydest;
++  const char *yys = yysrc;
+ 
+   while ((*yyd++ = *yys++) != '\0')
+     continue;
+@@ -932,53 +1095,171 @@ yystpcpy (yydest, yysrc)
+ #  endif
+ # endif
+ 
+-#endif /* !YYERROR_VERBOSE */
++# ifndef yytnamerr
++/* Copy to YYRES the contents of YYSTR after stripping away unnecessary
++   quotes and backslashes, so that it's suitable for yyerror.  The
++   heuristic is that double-quoting is unnecessary unless the string
++   contains an apostrophe, a comma, or backslash (other than
++   backslash-backslash).  YYSTR is taken from yytname.  If YYRES is
++   null, do not copy; instead, return the length of what the result
++   would have been.  */
++static YYSIZE_T
++yytnamerr (char *yyres, const char *yystr)
++{
++  if (*yystr == '"')
++    {
++      YYSIZE_T yyn = 0;
++      char const *yyp = yystr;
++
++      for (;;)
++	switch (*++yyp)
++	  {
++	  case '\'':
++	  case ',':
++	    goto do_not_strip_quotes;
++
++	  case '\\':
++	    if (*++yyp != '\\')
++	      goto do_not_strip_quotes;
++	    /* Fall through.  */
++	  default:
++	    if (yyres)
++	      yyres[yyn] = *yyp;
++	    yyn++;
++	    break;
++
++	  case '"':
++	    if (yyres)
++	      yyres[yyn] = '\0';
++	    return yyn;
++	  }
++    do_not_strip_quotes: ;
++    }
+ 
+-
++  if (! yyres)
++    return yystrlen (yystr);
+ 
+-#if YYDEBUG
+-/*--------------------------------.
+-| Print this symbol on YYOUTPUT.  |
+-`--------------------------------*/
++  return yystpcpy (yyres, yystr) - yyres;
++}
++# endif
+ 
+-#if defined (__STDC__) || defined (__cplusplus)
+-static void
+-yysymprint (FILE *yyoutput, int yytype, YYSTYPE *yyvaluep)
+-#else
+-static void
+-yysymprint (yyoutput, yytype, yyvaluep)
+-    FILE *yyoutput;
+-    int yytype;
+-    YYSTYPE *yyvaluep;
+-#endif
++/* Copy into YYRESULT an error message about the unexpected token
++   YYCHAR while in state YYSTATE.  Return the number of bytes copied,
++   including the terminating null byte.  If YYRESULT is null, do not
++   copy anything; just return the number of bytes that would be
++   copied.  As a special case, return 0 if an ordinary "syntax error"
++   message will do.  Return YYSIZE_MAXIMUM if overflow occurs during
++   size calculation.  */
++static YYSIZE_T
++yysyntax_error (char *yyresult, int yystate, int yychar)
+ {
+-  /* Pacify ``unused variable'' warnings.  */
+-  (void) yyvaluep;
++  int yyn = yypact[yystate];
+ 
+-  if (yytype < YYNTOKENS)
+-    YYFPRINTF (yyoutput, "token %s (", yytname[yytype]);
++  if (! (YYPACT_NINF < yyn && yyn <= YYLAST))
++    return 0;
+   else
+-    YYFPRINTF (yyoutput, "nterm %s (", yytname[yytype]);
+-
+-
+-# ifdef YYPRINT
+-  if (yytype < YYNTOKENS)
+-    YYPRINT (yyoutput, yytoknum[yytype], *yyvaluep);
+-# endif
+-  switch (yytype)
+     {
+-      default:
+-        break;
++      int yytype = YYTRANSLATE (yychar);
++      YYSIZE_T yysize0 = yytnamerr (0, yytname[yytype]);
++      YYSIZE_T yysize = yysize0;
++      YYSIZE_T yysize1;
++      int yysize_overflow = 0;
++      enum { YYERROR_VERBOSE_ARGS_MAXIMUM = 5 };
++      char const *yyarg[YYERROR_VERBOSE_ARGS_MAXIMUM];
++      int yyx;
++
++# if 0
++      /* This is so xgettext sees the translatable formats that are
++	 constructed on the fly.  */
++      YY_("syntax error, unexpected %s");
++      YY_("syntax error, unexpected %s, expecting %s");
++      YY_("syntax error, unexpected %s, expecting %s or %s");
++      YY_("syntax error, unexpected %s, expecting %s or %s or %s");
++      YY_("syntax error, unexpected %s, expecting %s or %s or %s or %s");
++# endif
++      char *yyfmt;
++      char const *yyf;
++      static char const yyunexpected[] = "syntax error, unexpected %s";
++      static char const yyexpecting[] = ", expecting %s";
++      static char const yyor[] = " or %s";
++      char yyformat[sizeof yyunexpected
++		    + sizeof yyexpecting - 1
++		    + ((YYERROR_VERBOSE_ARGS_MAXIMUM - 2)
++		       * (sizeof yyor - 1))];
++      char const *yyprefix = yyexpecting;
++
++      /* Start YYX at -YYN if negative to avoid negative indexes in
++	 YYCHECK.  */
++      int yyxbegin = yyn < 0 ? -yyn : 0;
++
++      /* Stay within bounds of both yycheck and yytname.  */
++      int yychecklim = YYLAST - yyn + 1;
++      int yyxend = yychecklim < YYNTOKENS ? yychecklim : YYNTOKENS;
++      int yycount = 1;
++
++      yyarg[0] = yytname[yytype];
++      yyfmt = yystpcpy (yyformat, yyunexpected);
++
++      for (yyx = yyxbegin; yyx < yyxend; ++yyx)
++	if (yycheck[yyx + yyn] == yyx && yyx != YYTERROR)
++	  {
++	    if (yycount == YYERROR_VERBOSE_ARGS_MAXIMUM)
++	      {
++		yycount = 1;
++		yysize = yysize0;
++		yyformat[sizeof yyunexpected - 1] = '\0';
++		break;
++	      }
++	    yyarg[yycount++] = yytname[yyx];
++	    yysize1 = yysize + yytnamerr (0, yytname[yyx]);
++	    yysize_overflow |= (yysize1 < yysize);
++	    yysize = yysize1;
++	    yyfmt = yystpcpy (yyfmt, yyprefix);
++	    yyprefix = yyor;
++	  }
++
++      yyf = YY_(yyformat);
++      yysize1 = yysize + yystrlen (yyf);
++      yysize_overflow |= (yysize1 < yysize);
++      yysize = yysize1;
++
++      if (yysize_overflow)
++	return YYSIZE_MAXIMUM;
++
++      if (yyresult)
++	{
++	  /* Avoid sprintf, as that infringes on the user's name space.
++	     Don't have undefined behavior even if the translation
++	     produced a string with the wrong number of "%s"s.  */
++	  char *yyp = yyresult;
++	  int yyi = 0;
++	  while ((*yyp = *yyf) != '\0')
++	    {
++	      if (*yyp == '%' && yyf[1] == 's' && yyi < yycount)
++		{
++		  yyp += yytnamerr (yyp, yyarg[yyi++]);
++		  yyf += 2;
++		}
++	      else
++		{
++		  yyp++;
++		  yyf++;
++		}
++	    }
++	}
++      return yysize;
+     }
+-  YYFPRINTF (yyoutput, ")");
+ }
++#endif /* YYERROR_VERBOSE */
++
+ 
+-#endif /* ! YYDEBUG */
+ /*-----------------------------------------------.
+ | Release the memory associated to this symbol.  |
+ `-----------------------------------------------*/
+ 
+-#if defined (__STDC__) || defined (__cplusplus)
++/*ARGSUSED*/
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
+ static void
+ yydestruct (const char *yymsg, int yytype, YYSTYPE *yyvaluep)
+ #else
+@@ -989,8 +1270,7 @@ yydestruct (yymsg, yytype, yyvaluep)
+     YYSTYPE *yyvaluep;
+ #endif
+ {
+-  /* Pacify ``unused variable'' warnings.  */
+-  (void) yyvaluep;
++  YYUSE (yyvaluep);
+ 
+   if (!yymsg)
+     yymsg = "Deleting";
+@@ -998,53 +1278,51 @@ yydestruct (yymsg, yytype, yyvaluep)
+ 
+   switch (yytype)
+     {
+-      case 48: /* choice_entry */
++      case 48: /* "choice_entry" */
+ 
+-        {
++	{
+ 	fprintf(stderr, "%s:%d: missing end statement for this entry\n",
+ 		(yyvaluep->menu)->file->name, (yyvaluep->menu)->lineno);
+ 	if (current_menu == (yyvaluep->menu))
+ 		menu_end_menu();
+ };
+ 
+-        break;
+-      case 54: /* if_entry */
++	break;
++      case 54: /* "if_entry" */
+ 
+-        {
++	{
+ 	fprintf(stderr, "%s:%d: missing end statement for this entry\n",
+ 		(yyvaluep->menu)->file->name, (yyvaluep->menu)->lineno);
+ 	if (current_menu == (yyvaluep->menu))
+ 		menu_end_menu();
+ };
+ 
+-        break;
+-      case 59: /* menu_entry */
++	break;
++      case 59: /* "menu_entry" */
+ 
+-        {
++	{
+ 	fprintf(stderr, "%s:%d: missing end statement for this entry\n",
+ 		(yyvaluep->menu)->file->name, (yyvaluep->menu)->lineno);
+ 	if (current_menu == (yyvaluep->menu))
+ 		menu_end_menu();
+ };
+ 
+-        break;
++	break;
+ 
+       default:
+-        break;
++	break;
+     }
+ }
+-
+ 
+ /* Prevent warnings from -Wmissing-prototypes.  */
+-
+ #ifdef YYPARSE_PARAM
+-# if defined (__STDC__) || defined (__cplusplus)
++#if defined __STDC__ || defined __cplusplus
+ int yyparse (void *YYPARSE_PARAM);
+-# else
++#else
+ int yyparse ();
+-# endif
++#endif
+ #else /* ! YYPARSE_PARAM */
+-#if defined (__STDC__) || defined (__cplusplus)
++#if defined __STDC__ || defined __cplusplus
+ int yyparse (void);
+ #else
+ int yyparse ();
+@@ -1052,11 +1330,10 @@ int yyparse ();
+ #endif /* ! YYPARSE_PARAM */
+ 
+ 
+-
+-/* The look-ahead symbol.  */
++/* The lookahead symbol.  */
+ int yychar;
+ 
+-/* The semantic value of the look-ahead symbol.  */
++/* The semantic value of the lookahead symbol.  */
+ YYSTYPE yylval;
+ 
+ /* Number of syntax errors so far.  */
+@@ -1064,19 +1341,23 @@ int yynerrs;
+ 
+ 
+ 
+-/*----------.
+-| yyparse.  |
+-`----------*/
++/*-------------------------.
++| yyparse or yypush_parse.  |
++`-------------------------*/
+ 
+ #ifdef YYPARSE_PARAM
+-# if defined (__STDC__) || defined (__cplusplus)
+-int yyparse (void *YYPARSE_PARAM)
+-# else
+-int yyparse (YYPARSE_PARAM)
+-  void *YYPARSE_PARAM;
+-# endif
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
++int
++yyparse (void *YYPARSE_PARAM)
++#else
++int
++yyparse (YYPARSE_PARAM)
++    void *YYPARSE_PARAM;
++#endif
+ #else /* ! YYPARSE_PARAM */
+-#if defined (__STDC__) || defined (__cplusplus)
++#if (defined __STDC__ || defined __C99__FUNC__ \
++     || defined __cplusplus || defined _MSC_VER)
+ int
+ yyparse (void)
+ #else
+@@ -1087,65 +1368,70 @@ yyparse ()
+ #endif
+ {
+ 
+-  register int yystate;
+-  register int yyn;
+-  int yyresult;
+-  /* Number of tokens to shift before error messages enabled.  */
+-  int yyerrstatus;
+-  /* Look-ahead token as an internal (translated) token number.  */
+-  int yytoken = 0;
+-
+-  /* Three stacks and their tools:
+-     `yyss': related to states,
+-     `yyvs': related to semantic values,
+-     `yyls': related to locations.
+-
+-     Refer to the stacks through separate pointers, to allow yyoverflow
+-     to reallocate them elsewhere.  */
+ 
+-  /* The state stack.  */
+-  short int yyssa[YYINITDEPTH];
+-  short int *yyss = yyssa;
+-  register short int *yyssp;
++    int yystate;
++    /* Number of tokens to shift before error messages enabled.  */
++    int yyerrstatus;
+ 
+-  /* The semantic value stack.  */
+-  YYSTYPE yyvsa[YYINITDEPTH];
+-  YYSTYPE *yyvs = yyvsa;
+-  register YYSTYPE *yyvsp;
++    /* The stacks and their tools:
++       `yyss': related to states.
++       `yyvs': related to semantic values.
+ 
++       Refer to the stacks thru separate pointers, to allow yyoverflow
++       to reallocate them elsewhere.  */
+ 
++    /* The state stack.  */
++    yytype_int16 yyssa[YYINITDEPTH];
++    yytype_int16 *yyss;
++    yytype_int16 *yyssp;
+ 
+-#define YYPOPSTACK   (yyvsp--, yyssp--)
++    /* The semantic value stack.  */
++    YYSTYPE yyvsa[YYINITDEPTH];
++    YYSTYPE *yyvs;
++    YYSTYPE *yyvsp;
+ 
+-  YYSIZE_T yystacksize = YYINITDEPTH;
++    YYSIZE_T yystacksize;
+ 
++  int yyn;
++  int yyresult;
++  /* Lookahead token as an internal (translated) token number.  */
++  int yytoken;
+   /* The variables used to return semantic value and location from the
+      action routines.  */
+   YYSTYPE yyval;
+ 
++#if YYERROR_VERBOSE
++  /* Buffer for error messages, and its allocated size.  */
++  char yymsgbuf[128];
++  char *yymsg = yymsgbuf;
++  YYSIZE_T yymsg_alloc = sizeof yymsgbuf;
++#endif
++
++#define YYPOPSTACK(N)   (yyvsp -= (N), yyssp -= (N))
++
++  /* The number of symbols on the RHS of the reduced rule.
++     Keep to zero when no symbol should be popped.  */
++  int yylen = 0;
+ 
+-  /* When reducing, the number of symbols on the RHS of the reduced
+-     rule.  */
+-  int yylen;
++  yytoken = 0;
++  yyss = yyssa;
++  yyvs = yyvsa;
++  yystacksize = YYINITDEPTH;
+ 
+   YYDPRINTF ((stderr, "Starting parse\n"));
+ 
+   yystate = 0;
+   yyerrstatus = 0;
+   yynerrs = 0;
+-  yychar = YYEMPTY;		/* Cause a token to be read.  */
++  yychar = YYEMPTY; /* Cause a token to be read.  */
+ 
+   /* Initialize stack pointers.
+      Waste one element of value and location stack
+      so that they stay on the same level as the state stack.
+      The wasted elements are never initialized.  */
+-
+   yyssp = yyss;
+   yyvsp = yyvs;
+ 
+-
+-  yyvsp[0] = yylval;
+-
+   goto yysetstate;
+ 
+ /*------------------------------------------------------------.
+@@ -1153,8 +1439,7 @@ yyparse ()
+ `------------------------------------------------------------*/
+  yynewstate:
+   /* In all cases, when you get here, the value and location stacks
+-     have just been pushed. so pushing a state here evens the stacks.
+-     */
++     have just been pushed.  So pushing a state here evens the stacks.  */
+   yyssp++;
+ 
+  yysetstate:
+@@ -1167,21 +1452,19 @@ yyparse ()
+ 
+ #ifdef yyoverflow
+       {
+-	/* Give user a chance to reallocate the stack. Use copies of
++	/* Give user a chance to reallocate the stack.  Use copies of
+ 	   these so that the &'s don't force the real ones into
+ 	   memory.  */
+ 	YYSTYPE *yyvs1 = yyvs;
+-	short int *yyss1 = yyss;
+-
++	yytype_int16 *yyss1 = yyss;
+ 
+ 	/* Each stack pointer address is followed by the size of the
+ 	   data in use in that stack, in bytes.  This used to be a
+ 	   conditional around just the two extra args, but that might
+ 	   be undefined if yyoverflow is a macro.  */
+-	yyoverflow ("parser stack overflow",
++	yyoverflow (YY_("memory exhausted"),
+ 		    &yyss1, yysize * sizeof (*yyssp),
+ 		    &yyvs1, yysize * sizeof (*yyvsp),
+-
+ 		    &yystacksize);
+ 
+ 	yyss = yyss1;
+@@ -1189,24 +1472,23 @@ yyparse ()
+       }
+ #else /* no yyoverflow */
+ # ifndef YYSTACK_RELOCATE
+-      goto yyoverflowlab;
++      goto yyexhaustedlab;
+ # else
+       /* Extend the stack our own way.  */
+       if (YYMAXDEPTH <= yystacksize)
+-	goto yyoverflowlab;
++	goto yyexhaustedlab;
+       yystacksize *= 2;
+       if (YYMAXDEPTH < yystacksize)
+ 	yystacksize = YYMAXDEPTH;
+ 
+       {
+-	short int *yyss1 = yyss;
++	yytype_int16 *yyss1 = yyss;
+ 	union yyalloc *yyptr =
+ 	  (union yyalloc *) YYSTACK_ALLOC (YYSTACK_BYTES (yystacksize));
+ 	if (! yyptr)
+-	  goto yyoverflowlab;
+-	YYSTACK_RELOCATE (yyss);
+-	YYSTACK_RELOCATE (yyvs);
+-
++	  goto yyexhaustedlab;
++	YYSTACK_RELOCATE (yyss_alloc, yyss);
++	YYSTACK_RELOCATE (yyvs_alloc, yyvs);
+ #  undef YYSTACK_RELOCATE
+ 	if (yyss1 != yyssa)
+ 	  YYSTACK_FREE (yyss1);
+@@ -1217,9 +1499,8 @@ yyparse ()
+       yyssp = yyss + yysize - 1;
+       yyvsp = yyvs + yysize - 1;
+ 
+-
+       YYDPRINTF ((stderr, "Stack size increased to %lu\n",
+-		  (unsigned long) yystacksize));
++		  (unsigned long int) yystacksize));
+ 
+       if (yyss + yystacksize - 1 <= yyssp)
+ 	YYABORT;
+@@ -1227,6 +1508,9 @@ yyparse ()
+ 
+   YYDPRINTF ((stderr, "Entering state %d\n", yystate));
+ 
++  if (yystate == YYFINAL)
++    YYACCEPT;
++
+   goto yybackup;
+ 
+ /*-----------.
+@@ -1234,19 +1518,17 @@ yyparse ()
+ `-----------*/
+ yybackup:
+ 
+-/* Do appropriate processing given the current state.  */
+-/* Read a look-ahead token if we need one and don't already have one.  */
+-/* yyresume: */
+-
+-  /* First try to decide what to do without reference to look-ahead token.  */
++  /* Do appropriate processing given the current state.  Read a
++     lookahead token if we need one and don't already have one.  */
+ 
++  /* First try to decide what to do without reference to lookahead token.  */
+   yyn = yypact[yystate];
+   if (yyn == YYPACT_NINF)
+     goto yydefault;
+ 
+-  /* Not known => get a look-ahead token if don't already have one.  */
++  /* Not known => get a lookahead token if don't already have one.  */
+ 
+-  /* YYCHAR is either YYEMPTY or YYEOF or a valid look-ahead symbol.  */
++  /* YYCHAR is either YYEMPTY or YYEOF or a valid lookahead symbol.  */
+   if (yychar == YYEMPTY)
+     {
+       YYDPRINTF ((stderr, "Reading a token: "));
+@@ -1278,25 +1560,20 @@ yybackup:
+       goto yyreduce;
+     }
+ 
+-  if (yyn == YYFINAL)
+-    YYACCEPT;
+-
+-  /* Shift the look-ahead token.  */
+-  YY_SYMBOL_PRINT ("Shifting", yytoken, &yylval, &yylloc);
+-
+-  /* Discard the token being shifted unless it is eof.  */
+-  if (yychar != YYEOF)
+-    yychar = YYEMPTY;
+-
+-  *++yyvsp = yylval;
+-
+-
+   /* Count tokens shifted since error; after three, turn off error
+      status.  */
+   if (yyerrstatus)
+     yyerrstatus--;
+ 
++  /* Shift the lookahead token.  */
++  YY_SYMBOL_PRINT ("Shifting", yytoken, &yylval, &yylloc);
++
++  /* Discard the shifted token.  */
++  yychar = YYEMPTY;
++
+   yystate = yyn;
++  *++yyvsp = yylval;
++
+   goto yynewstate;
+ 
+ 
+@@ -1338,13 +1615,13 @@ yyreduce:
+ 
+   case 9:
+ 
+-    { zconf_error("unknown statement \"%s\"", (yyvsp[-2].string)); ;}
++    { zconf_error("unknown statement \"%s\"", (yyvsp[(2) - (4)].string)); ;}
+     break;
+ 
+   case 10:
+ 
+     {
+-	zconf_error("unexpected option \"%s\"", kconf_id_strings + (yyvsp[-2].id)->name);
++	zconf_error("unexpected option \"%s\"", kconf_id_strings + (yyvsp[(2) - (4)].id)->name);
+ ;}
+     break;
+ 
+@@ -1355,7 +1632,7 @@ yyreduce:
+ 
+   case 25:
+ 
+-    { zconf_error("unknown option \"%s\"", (yyvsp[-2].string)); ;}
++    { zconf_error("unknown option \"%s\"", (yyvsp[(1) - (3)].string)); ;}
+     break;
+ 
+   case 26:
+@@ -1366,10 +1643,10 @@ yyreduce:
+   case 27:
+ 
+     {
+-	struct symbol *sym = sym_lookup((yyvsp[-1].string), 0);
++	struct symbol *sym = sym_lookup((yyvsp[(2) - (3)].string), 0);
+ 	sym->flags |= SYMBOL_OPTIONAL;
+ 	menu_add_entry(sym);
+-	printd(DEBUG_PARSE, "%s:%d:config %s\n", zconf_curname(), zconf_lineno(), (yyvsp[-1].string));
++	printd(DEBUG_PARSE, "%s:%d:config %s\n", zconf_curname(), zconf_lineno(), (yyvsp[(2) - (3)].string));
+ ;}
+     break;
+ 
+@@ -1384,10 +1661,10 @@ yyreduce:
+   case 29:
+ 
+     {
+-	struct symbol *sym = sym_lookup((yyvsp[-1].string), 0);
++	struct symbol *sym = sym_lookup((yyvsp[(2) - (3)].string), 0);
+ 	sym->flags |= SYMBOL_OPTIONAL;
+ 	menu_add_entry(sym);
+-	printd(DEBUG_PARSE, "%s:%d:menuconfig %s\n", zconf_curname(), zconf_lineno(), (yyvsp[-1].string));
++	printd(DEBUG_PARSE, "%s:%d:menuconfig %s\n", zconf_curname(), zconf_lineno(), (yyvsp[(2) - (3)].string));
+ ;}
+     break;
+ 
+@@ -1406,17 +1683,17 @@ yyreduce:
+   case 37:
+ 
+     {
+-	menu_set_type((yyvsp[-2].id)->stype);
++	menu_set_type((yyvsp[(1) - (3)].id)->stype);
+ 	printd(DEBUG_PARSE, "%s:%d:type(%u)\n",
+ 		zconf_curname(), zconf_lineno(),
+-		(yyvsp[-2].id)->stype);
++		(yyvsp[(1) - (3)].id)->stype);
+ ;}
+     break;
+ 
+   case 38:
+ 
+     {
+-	menu_add_prompt(P_PROMPT, (yyvsp[-2].string), (yyvsp[-1].expr));
++	menu_add_prompt(P_PROMPT, (yyvsp[(2) - (4)].string), (yyvsp[(3) - (4)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:prompt\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1424,19 +1701,19 @@ yyreduce:
+   case 39:
+ 
+     {
+-	menu_add_expr(P_DEFAULT, (yyvsp[-2].expr), (yyvsp[-1].expr));
+-	if ((yyvsp[-3].id)->stype != S_UNKNOWN)
+-		menu_set_type((yyvsp[-3].id)->stype);
++	menu_add_expr(P_DEFAULT, (yyvsp[(2) - (4)].expr), (yyvsp[(3) - (4)].expr));
++	if ((yyvsp[(1) - (4)].id)->stype != S_UNKNOWN)
++		menu_set_type((yyvsp[(1) - (4)].id)->stype);
+ 	printd(DEBUG_PARSE, "%s:%d:default(%u)\n",
+ 		zconf_curname(), zconf_lineno(),
+-		(yyvsp[-3].id)->stype);
++		(yyvsp[(1) - (4)].id)->stype);
+ ;}
+     break;
+ 
+   case 40:
+ 
+     {
+-	menu_add_symbol(P_SELECT, sym_lookup((yyvsp[-2].string), 0), (yyvsp[-1].expr));
++	menu_add_symbol(P_SELECT, sym_lookup((yyvsp[(2) - (4)].string), 0), (yyvsp[(3) - (4)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:select\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1444,7 +1721,7 @@ yyreduce:
+   case 41:
+ 
+     {
+-	menu_add_expr(P_RANGE, expr_alloc_comp(E_RANGE,(yyvsp[-3].symbol), (yyvsp[-2].symbol)), (yyvsp[-1].expr));
++	menu_add_expr(P_RANGE, expr_alloc_comp(E_RANGE,(yyvsp[(2) - (5)].symbol), (yyvsp[(3) - (5)].symbol)), (yyvsp[(4) - (5)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:range\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1470,7 +1747,7 @@ yyreduce:
+   case 44:
+ 
+     {
+-	if (zconf_endtoken((yyvsp[0].id), T_CHOICE, T_ENDCHOICE)) {
++	if (zconf_endtoken((yyvsp[(1) - (1)].id), T_CHOICE, T_ENDCHOICE)) {
+ 		menu_end_menu();
+ 		printd(DEBUG_PARSE, "%s:%d:endchoice\n", zconf_curname(), zconf_lineno());
+ 	}
+@@ -1480,7 +1757,7 @@ yyreduce:
+   case 52:
+ 
+     {
+-	menu_add_prompt(P_PROMPT, (yyvsp[-2].string), (yyvsp[-1].expr));
++	menu_add_prompt(P_PROMPT, (yyvsp[(2) - (4)].string), (yyvsp[(3) - (4)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:prompt\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1488,11 +1765,11 @@ yyreduce:
+   case 53:
+ 
+     {
+-	if ((yyvsp[-2].id)->stype == S_BOOLEAN || (yyvsp[-2].id)->stype == S_TRISTATE) {
+-		menu_set_type((yyvsp[-2].id)->stype);
++	if ((yyvsp[(1) - (3)].id)->stype == S_BOOLEAN || (yyvsp[(1) - (3)].id)->stype == S_TRISTATE) {
++		menu_set_type((yyvsp[(1) - (3)].id)->stype);
+ 		printd(DEBUG_PARSE, "%s:%d:type(%u)\n",
+ 			zconf_curname(), zconf_lineno(),
+-			(yyvsp[-2].id)->stype);
++			(yyvsp[(1) - (3)].id)->stype);
+ 	} else
+ 		YYERROR;
+ ;}
+@@ -1509,8 +1786,8 @@ yyreduce:
+   case 55:
+ 
+     {
+-	if ((yyvsp[-3].id)->stype == S_UNKNOWN) {
+-		menu_add_symbol(P_DEFAULT, sym_lookup((yyvsp[-2].string), 0), (yyvsp[-1].expr));
++	if ((yyvsp[(1) - (4)].id)->stype == S_UNKNOWN) {
++		menu_add_symbol(P_DEFAULT, sym_lookup((yyvsp[(2) - (4)].string), 0), (yyvsp[(3) - (4)].expr));
+ 		printd(DEBUG_PARSE, "%s:%d:default\n",
+ 			zconf_curname(), zconf_lineno());
+ 	} else
+@@ -1523,7 +1800,7 @@ yyreduce:
+     {
+ 	printd(DEBUG_PARSE, "%s:%d:if\n", zconf_curname(), zconf_lineno());
+ 	menu_add_entry(NULL);
+-	menu_add_dep((yyvsp[-1].expr));
++	menu_add_dep((yyvsp[(2) - (3)].expr));
+ 	(yyval.menu) = menu_add_menu();
+ ;}
+     break;
+@@ -1531,7 +1808,7 @@ yyreduce:
+   case 59:
+ 
+     {
+-	if (zconf_endtoken((yyvsp[0].id), T_IF, T_ENDIF)) {
++	if (zconf_endtoken((yyvsp[(1) - (1)].id), T_IF, T_ENDIF)) {
+ 		menu_end_menu();
+ 		printd(DEBUG_PARSE, "%s:%d:endif\n", zconf_curname(), zconf_lineno());
+ 	}
+@@ -1542,7 +1819,7 @@ yyreduce:
+ 
+     {
+ 	menu_add_entry(NULL);
+-	menu_add_prompt(P_MENU, (yyvsp[-1].string), NULL);
++	menu_add_prompt(P_MENU, (yyvsp[(2) - (3)].string), NULL);
+ 	printd(DEBUG_PARSE, "%s:%d:menu\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1557,7 +1834,7 @@ yyreduce:
+   case 67:
+ 
+     {
+-	if (zconf_endtoken((yyvsp[0].id), T_MENU, T_ENDMENU)) {
++	if (zconf_endtoken((yyvsp[(1) - (1)].id), T_MENU, T_ENDMENU)) {
+ 		menu_end_menu();
+ 		printd(DEBUG_PARSE, "%s:%d:endmenu\n", zconf_curname(), zconf_lineno());
+ 	}
+@@ -1567,8 +1844,8 @@ yyreduce:
+   case 73:
+ 
+     {
+-	printd(DEBUG_PARSE, "%s:%d:source %s\n", zconf_curname(), zconf_lineno(), (yyvsp[-1].string));
+-	zconf_nextfile((yyvsp[-1].string));
++	printd(DEBUG_PARSE, "%s:%d:source %s\n", zconf_curname(), zconf_lineno(), (yyvsp[(2) - (3)].string));
++	zconf_nextfile((yyvsp[(2) - (3)].string));
+ ;}
+     break;
+ 
+@@ -1576,7 +1853,7 @@ yyreduce:
+ 
+     {
+ 	menu_add_entry(NULL);
+-	menu_add_prompt(P_COMMENT, (yyvsp[-1].string), NULL);
++	menu_add_prompt(P_COMMENT, (yyvsp[(2) - (3)].string), NULL);
+ 	printd(DEBUG_PARSE, "%s:%d:comment\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1599,14 +1876,14 @@ yyreduce:
+   case 77:
+ 
+     {
+-	current_entry->sym->help = (yyvsp[0].string);
++	current_entry->sym->help = (yyvsp[(2) - (2)].string);
+ ;}
+     break;
+ 
+   case 82:
+ 
+     {
+-	menu_add_dep((yyvsp[-1].expr));
++	menu_add_dep((yyvsp[(3) - (4)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:depends on\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1614,7 +1891,7 @@ yyreduce:
+   case 83:
+ 
+     {
+-	menu_add_dep((yyvsp[-1].expr));
++	menu_add_dep((yyvsp[(2) - (3)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:depends\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1622,7 +1899,7 @@ yyreduce:
+   case 84:
+ 
+     {
+-	menu_add_dep((yyvsp[-1].expr));
++	menu_add_dep((yyvsp[(2) - (3)].expr));
+ 	printd(DEBUG_PARSE, "%s:%d:requires\n", zconf_curname(), zconf_lineno());
+ ;}
+     break;
+@@ -1630,23 +1907,23 @@ yyreduce:
+   case 86:
+ 
+     {
+-	menu_add_prompt(P_PROMPT, (yyvsp[-1].string), (yyvsp[0].expr));
++	menu_add_prompt(P_PROMPT, (yyvsp[(1) - (2)].string), (yyvsp[(2) - (2)].expr));
+ ;}
+     break;
+ 
+   case 89:
+ 
+-    { (yyval.id) = (yyvsp[-1].id); ;}
++    { (yyval.id) = (yyvsp[(1) - (2)].id); ;}
+     break;
+ 
+   case 90:
+ 
+-    { (yyval.id) = (yyvsp[-1].id); ;}
++    { (yyval.id) = (yyvsp[(1) - (2)].id); ;}
+     break;
+ 
+   case 91:
+ 
+-    { (yyval.id) = (yyvsp[-1].id); ;}
++    { (yyval.id) = (yyvsp[(1) - (2)].id); ;}
+     break;
+ 
+   case 94:
+@@ -1656,69 +1933,66 @@ yyreduce:
+ 
+   case 95:
+ 
+-    { (yyval.expr) = (yyvsp[0].expr); ;}
++    { (yyval.expr) = (yyvsp[(2) - (2)].expr); ;}
+     break;
+ 
+   case 96:
+ 
+-    { (yyval.expr) = expr_alloc_symbol((yyvsp[0].symbol)); ;}
++    { (yyval.expr) = expr_alloc_symbol((yyvsp[(1) - (1)].symbol)); ;}
+     break;
+ 
+   case 97:
+ 
+-    { (yyval.expr) = expr_alloc_comp(E_EQUAL, (yyvsp[-2].symbol), (yyvsp[0].symbol)); ;}
++    { (yyval.expr) = expr_alloc_comp(E_EQUAL, (yyvsp[(1) - (3)].symbol), (yyvsp[(3) - (3)].symbol)); ;}
+     break;
+ 
+   case 98:
+ 
+-    { (yyval.expr) = expr_alloc_comp(E_UNEQUAL, (yyvsp[-2].symbol), (yyvsp[0].symbol)); ;}
++    { (yyval.expr) = expr_alloc_comp(E_UNEQUAL, (yyvsp[(1) - (3)].symbol), (yyvsp[(3) - (3)].symbol)); ;}
+     break;
+ 
+   case 99:
+ 
+-    { (yyval.expr) = (yyvsp[-1].expr); ;}
++    { (yyval.expr) = (yyvsp[(2) - (3)].expr); ;}
+     break;
+ 
+   case 100:
+ 
+-    { (yyval.expr) = expr_alloc_one(E_NOT, (yyvsp[0].expr)); ;}
++    { (yyval.expr) = expr_alloc_one(E_NOT, (yyvsp[(2) - (2)].expr)); ;}
+     break;
+ 
+   case 101:
+ 
+-    { (yyval.expr) = expr_alloc_two(E_OR, (yyvsp[-2].expr), (yyvsp[0].expr)); ;}
++    { (yyval.expr) = expr_alloc_two(E_OR, (yyvsp[(1) - (3)].expr), (yyvsp[(3) - (3)].expr)); ;}
+     break;
+ 
+   case 102:
+ 
+-    { (yyval.expr) = expr_alloc_two(E_AND, (yyvsp[-2].expr), (yyvsp[0].expr)); ;}
++    { (yyval.expr) = expr_alloc_two(E_AND, (yyvsp[(1) - (3)].expr), (yyvsp[(3) - (3)].expr)); ;}
+     break;
+ 
+   case 103:
+ 
+-    { (yyval.symbol) = sym_lookup((yyvsp[0].string), 0); free((yyvsp[0].string)); ;}
++    { (yyval.symbol) = sym_lookup((yyvsp[(1) - (1)].string), 0); free((yyvsp[(1) - (1)].string)); ;}
+     break;
+ 
+   case 104:
+ 
+-    { (yyval.symbol) = sym_lookup((yyvsp[0].string), 1); free((yyvsp[0].string)); ;}
++    { (yyval.symbol) = sym_lookup((yyvsp[(1) - (1)].string), 1); free((yyvsp[(1) - (1)].string)); ;}
+     break;
+ 
+ 
+-    }
+-
+-/* Line 1037 of yacc.c.  */
+-
+-
+-  yyvsp -= yylen;
+-  yyssp -= yylen;
+ 
++      default: break;
++    }
++  YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
+ 
++  YYPOPSTACK (yylen);
++  yylen = 0;
+   YY_STACK_PRINT (yyss, yyssp);
+ 
+   *++yyvsp = yyval;
+ 
+-
+   /* Now `shift' the result of the reduction.  Determine what state
+      that goes to, based on the state we popped back to and the rule
+      number reduced by.  */
+@@ -1742,98 +2016,65 @@ yyerrlab:
+   if (!yyerrstatus)
+     {
+       ++yynerrs;
+-#if YYERROR_VERBOSE
+-      yyn = yypact[yystate];
+-
+-      if (YYPACT_NINF < yyn && yyn < YYLAST)
+-	{
+-	  YYSIZE_T yysize = 0;
+-	  int yytype = YYTRANSLATE (yychar);
+-	  const char* yyprefix;
+-	  char *yymsg;
+-	  int yyx;
+-
+-	  /* Start YYX at -YYN if negative to avoid negative indexes in
+-	     YYCHECK.  */
+-	  int yyxbegin = yyn < 0 ? -yyn : 0;
+-
+-	  /* Stay within bounds of both yycheck and yytname.  */
+-	  int yychecklim = YYLAST - yyn;
+-	  int yyxend = yychecklim < YYNTOKENS ? yychecklim : YYNTOKENS;
+-	  int yycount = 0;
+-
+-	  yyprefix = ", expecting ";
+-	  for (yyx = yyxbegin; yyx < yyxend; ++yyx)
+-	    if (yycheck[yyx + yyn] == yyx && yyx != YYTERROR)
++#if ! YYERROR_VERBOSE
++      yyerror (YY_("syntax error"));
++#else
++      {
++	YYSIZE_T yysize = yysyntax_error (0, yystate, yychar);
++	if (yymsg_alloc < yysize && yymsg_alloc < YYSTACK_ALLOC_MAXIMUM)
++	  {
++	    YYSIZE_T yyalloc = 2 * yysize;
++	    if (! (yysize <= yyalloc && yyalloc <= YYSTACK_ALLOC_MAXIMUM))
++	      yyalloc = YYSTACK_ALLOC_MAXIMUM;
++	    if (yymsg != yymsgbuf)
++	      YYSTACK_FREE (yymsg);
++	    yymsg = (char *) YYSTACK_ALLOC (yyalloc);
++	    if (yymsg)
++	      yymsg_alloc = yyalloc;
++	    else
+ 	      {
+-		yysize += yystrlen (yyprefix) + yystrlen (yytname [yyx]);
+-		yycount += 1;
+-		if (yycount == 5)
+-		  {
+-		    yysize = 0;
+-		    break;
+-		  }
++		yymsg = yymsgbuf;
++		yymsg_alloc = sizeof yymsgbuf;
+ 	      }
+-	  yysize += (sizeof ("syntax error, unexpected ")
+-		     + yystrlen (yytname[yytype]));
+-	  yymsg = (char *) YYSTACK_ALLOC (yysize);
+-	  if (yymsg != 0)
+-	    {
+-	      char *yyp = yystpcpy (yymsg, "syntax error, unexpected ");
+-	      yyp = yystpcpy (yyp, yytname[yytype]);
++	  }
+ 
+-	      if (yycount < 5)
+-		{
+-		  yyprefix = ", expecting ";
+-		  for (yyx = yyxbegin; yyx < yyxend; ++yyx)
+-		    if (yycheck[yyx + yyn] == yyx && yyx != YYTERROR)
+-		      {
+-			yyp = yystpcpy (yyp, yyprefix);
+-			yyp = yystpcpy (yyp, yytname[yyx]);
+-			yyprefix = " or ";
+-		      }
+-		}
+-	      yyerror (yymsg);
+-	      YYSTACK_FREE (yymsg);
+-	    }
+-	  else
+-	    yyerror ("syntax error; also virtual memory exhausted");
+-	}
+-      else
+-#endif /* YYERROR_VERBOSE */
+-	yyerror ("syntax error");
++	if (0 < yysize && yysize <= yymsg_alloc)
++	  {
++	    (void) yysyntax_error (yymsg, yystate, yychar);
++	    yyerror (yymsg);
++	  }
++	else
++	  {
++	    yyerror (YY_("syntax error"));
++	    if (yysize != 0)
++	      goto yyexhaustedlab;
++	  }
++      }
++#endif
+     }
+ 
+ 
+ 
+   if (yyerrstatus == 3)
+     {
+-      /* If just tried and failed to reuse look-ahead token after an
++      /* If just tried and failed to reuse lookahead token after an
+ 	 error, discard it.  */
+ 
+       if (yychar <= YYEOF)
+-        {
+-          /* If at end of input, pop the error token,
+-	     then the rest of the stack, then return failure.  */
++	{
++	  /* Return failure if at end of input.  */
+ 	  if (yychar == YYEOF)
+-	     for (;;)
+-	       {
+-
+-		 YYPOPSTACK;
+-		 if (yyssp == yyss)
+-		   YYABORT;
+-		 yydestruct ("Error: popping",
+-                             yystos[*yyssp], yyvsp);
+-	       }
+-        }
++	    YYABORT;
++	}
+       else
+ 	{
+-	  yydestruct ("Error: discarding", yytoken, &yylval);
++	  yydestruct ("Error: discarding",
++		      yytoken, &yylval);
+ 	  yychar = YYEMPTY;
+ 	}
+     }
+ 
+-  /* Else will try to reuse look-ahead token after shifting the error
++  /* Else will try to reuse lookahead token after shifting the error
+      token.  */
+   goto yyerrlab1;
+ 
+@@ -1843,15 +2084,17 @@ yyerrlab:
+ `---------------------------------------------------*/
+ yyerrorlab:
+ 
+-#ifdef __GNUC__
+-  /* Pacify GCC when the user code never invokes YYERROR and the label
+-     yyerrorlab therefore never appears in user code.  */
+-  if (0)
++  /* Pacify compilers like GCC when the user code never invokes
++     YYERROR and the label yyerrorlab therefore never appears in user
++     code.  */
++  if (/*CONSTCOND*/ 0)
+      goto yyerrorlab;
+-#endif
+ 
+-yyvsp -= yylen;
+-  yyssp -= yylen;
++  /* Do not reclaim the symbols of the rule which action triggered
++     this YYERROR.  */
++  YYPOPSTACK (yylen);
++  yylen = 0;
++  YY_STACK_PRINT (yyss, yyssp);
+   yystate = *yyssp;
+   goto yyerrlab1;
+ 
+@@ -1881,19 +2124,17 @@ yyerrlab1:
+ 	YYABORT;
+ 
+ 
+-      yydestruct ("Error: popping", yystos[yystate], yyvsp);
+-      YYPOPSTACK;
++      yydestruct ("Error: popping",
++		  yystos[yystate], yyvsp);
++      YYPOPSTACK (1);
+       yystate = *yyssp;
+       YY_STACK_PRINT (yyss, yyssp);
+     }
+ 
+-  if (yyn == YYFINAL)
+-    YYACCEPT;
+-
+   *++yyvsp = yylval;
+ 
+ 
+-  /* Shift the error token. */
++  /* Shift the error token.  */
+   YY_SYMBOL_PRINT ("Shifting", yystos[yyn], yyvsp, yylsp);
+ 
+   yystate = yyn;
+@@ -1911,28 +2152,43 @@ yyacceptlab:
+ | yyabortlab -- YYABORT comes here.  |
+ `-----------------------------------*/
+ yyabortlab:
+-  yydestruct ("Error: discarding lookahead",
+-              yytoken, &yylval);
+-  yychar = YYEMPTY;
+   yyresult = 1;
+   goto yyreturn;
+ 
+-#ifndef yyoverflow
+-/*----------------------------------------------.
+-| yyoverflowlab -- parser overflow comes here.  |
+-`----------------------------------------------*/
+-yyoverflowlab:
+-  yyerror ("parser stack overflow");
++#if !defined(yyoverflow) || YYERROR_VERBOSE
++/*-------------------------------------------------.
++| yyexhaustedlab -- memory exhaustion comes here.  |
++`-------------------------------------------------*/
++yyexhaustedlab:
++  yyerror (YY_("memory exhausted"));
+   yyresult = 2;
+   /* Fall through.  */
+ #endif
+ 
+ yyreturn:
++  if (yychar != YYEMPTY)
++     yydestruct ("Cleanup: discarding lookahead",
++		 yytoken, &yylval);
++  /* Do not reclaim the symbols of the rule which action triggered
++     this YYABORT or YYACCEPT.  */
++  YYPOPSTACK (yylen);
++  YY_STACK_PRINT (yyss, yyssp);
++  while (yyssp != yyss)
++    {
++      yydestruct ("Cleanup: popping",
++		  yystos[*yyssp], yyvsp);
++      YYPOPSTACK (1);
++    }
+ #ifndef yyoverflow
+   if (yyss != yyssa)
+     YYSTACK_FREE (yyss);
+ #endif
+-  return yyresult;
++#if YYERROR_VERBOSE
++  if (yymsg != yymsgbuf)
++    YYSTACK_FREE (yymsg);
++#endif
++  /* Make sure YYID is used.  */
++  return YYID (yyresult);
+ }
+ 
+ 
+@@ -2170,4 +2426,3 @@ void zconfdump(FILE *out)
+ #include "symbol.c"
+ #include "menu.c"
+ 
+-
+
+commit 91c940c71d504db70417c43b4c9ed80f5e37f41b
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:32:19 2010 +0200
+
+    readlink: use xmalloc_realpath()
+    
+    Using realpath() directly with a non-NULL output buffer is unsafe because its
+    behavior is unspecified on systems which don't have PATH_MAX (ie. Hurd)
+    
+    I beleive this also fixes a small bug whereby 'buf' would not be freed
+    on 'readlink -v' with ENABLE_FEATURE_CLEANUP.
+
+diff --git a/coreutils/readlink.c b/coreutils/readlink.c
+index 20df38b..2ed5e2c 100644
+--- a/coreutils/readlink.c
++++ b/coreutils/readlink.c
+@@ -36,7 +36,6 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
+ {
+ 	char *buf;
+ 	char *fname;
+-	char pathbuf[PATH_MAX];
+ 
+ 	IF_FEATURE_READLINK_FOLLOW(
+ 		unsigned opt;
+@@ -56,7 +55,7 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
+ 		logmode = LOGMODE_NONE;
+ 
+ 	if (opt & 1) { /* -f */
+-		buf = realpath(fname, pathbuf);
++		buf = xmalloc_realpath(fname);
+ 	} else {
+ 		buf = xmalloc_readlink_or_warn(fname);
+ 	}
+@@ -65,7 +64,7 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
+ 		return EXIT_FAILURE;
+ 	printf((opt & 2) ? "%s" : "%s\n", buf);
+ 
+-	if (ENABLE_FEATURE_CLEAN_UP && !opt)
++	if (ENABLE_FEATURE_CLEAN_UP)
+ 		free(buf);
+ 
+ 	fflush_stdout_and_exit(EXIT_SUCCESS);
+
+commit 21719687dc904bf39c31d302959295016bfa6c04
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:37:24 2010 +0200
+
+    mark Linux-specific configuration options
+    
+    PLATFORM_LINUX is used as a dependency for applets or features
+    which require Linux-specific interfaces.
+
+diff --git a/Config.in b/Config.in
+index 99f814e..054256f 100644
+--- a/Config.in
++++ b/Config.in
+@@ -30,6 +30,17 @@ config EXTRA_COMPAT
+ 	  some GNU extensions in libc. You probably only need this option
+ 	  if you plan to run busybox on desktop.
+ 
++config PLATFORM_LINUX
++	bool "Enable Linux-specific applets and features"
++	default y
++	help
++	  For the most part, busybox requires only POSIX compatibility
++	  from the target system, but some applets and features use
++	  Linux-specific interfaces.
++
++	  Answering 'N' here will disable such applets and hide the
++	  corresponding configuration options.
++
+ choice
+ 	prompt "Buffer allocation policy"
+ 	default FEATURE_BUFFERS_USE_MALLOC
+@@ -222,6 +233,7 @@ config FEATURE_SUID_CONFIG_QUIET
+ config SELINUX
+ 	bool "Support NSA Security Enhanced Linux"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Enable support for SELinux in applets ls, ps, and id. Also provide
+ 	  the option of compiling in SELinux applets.
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index cd0a931..ba72b21 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -8,6 +8,7 @@ menu "Console Utilities"
+ config CHVT
+ 	bool "chvt"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program is used to change to another terminal.
+ 	  Example: chvt 4 (change to terminal /dev/tty4)
+@@ -21,12 +22,14 @@ config CLEAR
+ config DEALLOCVT
+ 	bool "deallocvt"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program deallocates unused virtual consoles.
+ 
+ config DUMPKMAP
+ 	bool "dumpkmap"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program dumps the kernel's keyboard translation table to
+ 	  stdout, in binary format. You can then use loadkmap to load it.
+@@ -34,18 +37,21 @@ config DUMPKMAP
+ config KBD_MODE
+ 	bool "kbd_mode"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program reports and sets keyboard mode.
+ 
+ config LOADFONT
+ 	bool "loadfont"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program loads a console font from standard input.
+ 
+ config LOADKMAP
+ 	bool "loadkmap"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program loads a keyboard translation table from
+ 	  standard input.
+@@ -53,6 +59,7 @@ config LOADKMAP
+ config OPENVT
+ 	bool "openvt"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program is used to start a command on an unused
+ 	  virtual terminal.
+@@ -84,6 +91,7 @@ config FEATURE_RESIZE_PRINT
+ config SETCONSOLE
+ 	bool "setconsole"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program redirects the system console to another device,
+ 	  like the current tty while logged in via telnet.
+@@ -98,6 +106,7 @@ config FEATURE_SETCONSOLE_LONG_OPTIONS
+ config SETFONT
+ 	bool "setfont"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Allows to load console screen map. Useful for i18n.
+ 
+@@ -119,6 +128,7 @@ config DEFAULT_SETFONT_DIR
+ config SETKEYCODES
+ 	bool "setkeycodes"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program loads entries into the kernel's scancode-to-keycode
+ 	  map, allowing unusual keyboards to generate usable keycodes.
+@@ -126,12 +136,14 @@ config SETKEYCODES
+ config SETLOGCONS
+ 	bool "setlogcons"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program redirects the output console of kernel messages.
+ 
+ config SHOWKEY
+ 	bool "showkey"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Shows keys pressed.
+ 
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index cacfb96..6648111 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -606,6 +606,7 @@ config FEATURE_STAT_FORMAT
+ config STTY
+ 	bool "stty"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  stty is used to change and print terminal line settings.
+ 
+diff --git a/e2fsprogs/Config.in b/e2fsprogs/Config.in
+index 9a0088a..578ed63 100644
+--- a/e2fsprogs/Config.in
++++ b/e2fsprogs/Config.in
+@@ -44,6 +44,7 @@ config LSATTR
+ ### config TUNE2FS
+ ###	bool "tune2fs"
+ ###	default n
++###	depends on PLATFORM_LINUX
+ ###	help
+ ###	  tune2fs allows the system administrator to adjust various tunable
+ ###	  filesystem parameters on Linux ext2/ext3 filesystems.
+diff --git a/init/Config.in b/init/Config.in
+index 3d99d47..e26b9e9 100644
+--- a/init/Config.in
++++ b/init/Config.in
+@@ -8,6 +8,7 @@ menu "Init Utilities"
+ config INIT
+ 	bool "init"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  init is the first program run when the system boots.
+@@ -90,6 +91,7 @@ config FEATURE_INITRD
+ config HALT
+ 	bool "poweroff, halt, and reboot"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Stop all processes and either halt, reboot, or power off the system.
+ 
+diff --git a/libbb/Config.in b/libbb/Config.in
+index bdb6dfa..6505da3 100644
+--- a/libbb/Config.in
++++ b/libbb/Config.in
+@@ -152,6 +152,7 @@ config FEATURE_COPYBUF_KB
+ config MONOTONIC_SYSCALL
+ 	bool "Use clock_gettime(CLOCK_MONOTONIC) syscall"
+ 	default y
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Use clock_gettime(CLOCK_MONOTONIC) syscall for measuring
+ 	  time intervals (time, ping, traceroute etc need this).
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index f6c0e2e..79249d1 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -177,6 +177,7 @@ config DELUSER
+ config GETTY
+ 	bool "getty"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  getty lets you log in on a tty, it is normally invoked by init.
+@@ -200,6 +201,7 @@ config FEATURE_WTMP
+ config LOGIN
+ 	bool "login"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SUID
+ 	select FEATURE_SYSLOG
+ 	help
+@@ -309,6 +311,7 @@ config SULOGIN
+ config VLOCK
+ 	bool "vlock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SUID
+ 	help
+ 	  Build the "vlock" applet which allows you to lock (virtual) terminals.
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 9a81ecc..f5eb9fb 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -8,6 +8,7 @@ menu "Miscellaneous Utilities"
+ config ADJTIMEX
+ 	bool "adjtimex"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Adjtimex reads and optionally sets adjustment parameters for
+ 	  the Linux clock adjustment algorithm.
+@@ -22,6 +23,7 @@ config BBCONFIG
+ config BEEP
+ 	bool "beep"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The beep applets beeps in a given freq/Hz.
+ 
+@@ -178,6 +180,7 @@ config FEATURE_DC_LIBM
+ config DEVFSD
+ 	bool "devfsd (obsolete)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  This is deprecated and should NOT be used anymore.
+@@ -221,6 +224,7 @@ config DEVFSD_VERBOSE
+ config FEATURE_DEVFS
+ 	bool "Use devfs names for all devices (obsolete)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This is obsolete and should NOT be used anymore.
+ 	  Use linux >= 2.6 (optionally with hotplug) and mdev instead!
+@@ -240,6 +244,7 @@ config DEVMEM
+ config EJECT
+ 	bool "eject"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Used to eject cdroms. (defaults to /dev/cdrom)
+ 
+@@ -254,6 +259,7 @@ config FEATURE_EJECT_SCSI
+ config FBSPLASH
+ 	bool "fbsplash"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Shows splash image and progress bar on framebuffer device.
+ 	  Can be used during boot phase of an embedded device. ~2kb.
+@@ -275,6 +281,7 @@ config FBSPLASH
+ config FLASH_LOCK
+ 	bool "flash_lock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The flash_lock binary from mtd-utils as of git head 5ec0c10d0. This
+ 	  utility locks part or all of the flash device.
+@@ -282,6 +289,7 @@ config FLASH_LOCK
+ config FLASH_UNLOCK
+ 	bool "flash_unlock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The flash_unlock binary from mtd-utils as of git head 5ec0c10d0. This
+ 	  utility unlocks part or all of the flash device.
+@@ -289,6 +297,7 @@ config FLASH_UNLOCK
+ config FLASH_ERASEALL
+ 	bool "flash_eraseall"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The flash_eraseall binary from mtd-utils as of git head c4c6a59eb.
+ 	  This utility is used to erase the whole MTD device.
+@@ -296,6 +305,7 @@ config FLASH_ERASEALL
+ config IONICE
+ 	bool "ionice"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Set/set program io scheduling class and priority
+ 	  Requires kernel >= 2.6.13
+@@ -303,6 +313,7 @@ config IONICE
+ config INOTIFYD
+ 	bool "inotifyd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Simple inotify daemon. Reports filesystem changes. Requires
+ 	  kernel >= 2.6.13
+@@ -401,6 +412,7 @@ config FEATURE_LESS_LINENUMS
+ config HDPARM
+ 	bool "hdparm"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Get/Set hard drive parameters. Primarily intended for ATA
+ 	  drives. Adds about 13k (or around 30k if you enable the
+@@ -517,6 +529,7 @@ config MT
+ config RAIDAUTORUN
+ 	bool "raidautorun"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  raidautorun tells the kernel md driver to
+ 	  search and start RAID arrays.
+@@ -524,7 +537,7 @@ config RAIDAUTORUN
+ config READAHEAD
+ 	bool "readahead"
+ 	default n
+-	depends on LFS
++	depends on LFS && PLATFORM_LINUX
+ 	help
+ 	  Preload the files listed on the command line into RAM cache so that
+ 	  subsequent reads on these files will not block on disk I/O.
+@@ -569,6 +582,7 @@ config STRINGS
+ config TASKSET
+ 	bool "taskset"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Retrieve or set a processes's CPU affinity.
+ 	  This requires sched_{g,s}etaffinity support in your libc.
+@@ -615,6 +629,7 @@ config VOLNAME
+ config WATCHDOG
+ 	bool "watchdog"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The watchdog utility is used with hardware or software watchdog
+ 	  device drivers. It opens the specified watchdog device special file
+diff --git a/modutils/Config.in b/modutils/Config.in
+index d2a2e04..963e28d 100644
+--- a/modutils/Config.in
++++ b/modutils/Config.in
+@@ -4,6 +4,7 @@
+ #
+ 
+ menu "Linux Module Utilities"
++depends on PLATFORM_LINUX
+ 
+ config MODPROBE_SMALL
+ 	bool "Simplified modutils"
+diff --git a/networking/Config.in b/networking/Config.in
+index 83522ff..0cdf448 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -41,6 +41,7 @@ config FEATURE_PREFER_IPV4_ADDRESS
+ config VERBOSE_RESOLUTION_ERRORS
+ 	bool "Verbose resolution errors"
+ 	default n
++	depends on PLATFORM_LINUX #because of xsocket() in libbb/xfuncs_prinf.c
+ 	help
+ 	  Enable if you are not satisfied with simplistic
+ 	  "can't resolve 'hostname.com'" and want to know more.
+@@ -49,18 +50,21 @@ config VERBOSE_RESOLUTION_ERRORS
+ config ARP
+ 	bool "arp"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Manipulate the system ARP cache.
+ 
+ config ARPING
+ 	bool "arping"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Ping hosts by ARP packets.
+ 
+ config BRCTL
+ 	bool "brctl"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Manage ethernet bridges.
+ 	  Supports addbr/delbr and addif/delif.
+@@ -93,6 +97,7 @@ config DNSD
+ config ETHER_WAKE
+ 	bool "ether-wake"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Send a magic packet to wake up sleeping machines.
+ 
+@@ -256,6 +261,7 @@ config FEATURE_HTTPD_PROXY
+ config IFCONFIG
+ 	bool "ifconfig"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Ifconfig is used to configure the kernel-resident network interfaces.
+ 
+@@ -303,6 +309,7 @@ config FEATURE_IFCONFIG_BROADCAST_PLUS
+ config IFENSLAVE
+ 	bool "ifenslave"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Userspace application to bind several interfaces
+ 	  to a logical interface (use with kernel bonding driver).
+@@ -310,6 +317,7 @@ config IFENSLAVE
+ config IFPLUGD
+ 	bool "ifplugd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Network interface plug detection daemon.
+ 
+@@ -351,7 +359,7 @@ config FEATURE_IFUPDOWN_IP
+ config FEATURE_IFUPDOWN_IP_BUILTIN
+ 	bool "Use busybox ip applet"
+ 	default y
+-	depends on FEATURE_IFUPDOWN_IP
++	depends on FEATURE_IFUPDOWN_IP && PLATFORM_LINUX
+ 	select IP
+ 	select FEATURE_IP_ADDRESS
+ 	select FEATURE_IP_LINK
+@@ -470,6 +478,7 @@ config FEATURE_INETD_RPC
+ config IP
+ 	bool "ip"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The "ip" applet is a TCP/IP interface configuration and routing
+ 	  utility. You generally don't need "ip" to use busybox with
+@@ -585,6 +594,7 @@ config FEATURE_IPCALC_LONG_OPTIONS
+ config NAMEIF
+ 	bool "nameif"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  nameif is used to rename network interface by its MAC address.
+@@ -636,6 +646,7 @@ config NC_EXTRA
+ config NETSTAT
+ 	bool "netstat"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  netstat prints information about the Linux networking subsystem.
+ 
+@@ -664,6 +675,7 @@ config NSLOOKUP
+ config PING
+ 	bool "ping"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  ping uses the ICMP protocol's mandatory ECHO_REQUEST datagram to
+ 	  elicit an ICMP ECHO_RESPONSE from a host or gateway.
+@@ -692,12 +704,14 @@ config PSCAN
+ config ROUTE
+ 	bool "route"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Route displays or manipulates the kernel's IP routing tables.
+ 
+ config SLATTACH
+ 	bool "slattach"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  slattach is a small utility to attach network interfaces to serial
+ 	  lines.
+@@ -843,6 +857,7 @@ config TFTP_DEBUG
+ config TRACEROUTE
+ 	bool "traceroute"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Utility to trace the route of IP packets.
+ 
+@@ -883,6 +898,7 @@ config IFUPDOWN_UDHCPC_CMD_OPTIONS
+ config VCONFIG
+ 	bool "vconfig"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Creates, removes, and configures VLAN interfaces
+ 
+@@ -917,6 +933,7 @@ config FEATURE_WGET_LONG_OPTIONS
+ config ZCIP
+ 	bool "zcip"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  ZCIP provides ZeroConf IPv4 address selection, according to RFC 3927.
+@@ -929,6 +946,7 @@ config ZCIP
+ config TCPSVD
+ 	bool "tcpsvd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  tcpsvd listens on a TCP port and runs a program for each new
+ 	  connection.
+@@ -936,6 +954,7 @@ config TCPSVD
+ config TUNCTL
+ 	bool "tunctl"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  tunctl creates or deletes tun devices.
+ 
+@@ -950,6 +969,7 @@ config FEATURE_TUNCTL_UG
+ config UDPSVD
+ 	bool "udpsvd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  udpsvd listens on an UDP port and runs a program for each new
+ 	  connection.
+diff --git a/networking/udhcp/Config.in b/networking/udhcp/Config.in
+index 5f76dd8..af6a925 100644
+--- a/networking/udhcp/Config.in
++++ b/networking/udhcp/Config.in
+@@ -6,6 +6,7 @@
+ config APP_UDHCPD
+ 	bool "udhcp server (udhcpd)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  udhcpd is a DHCP server geared primarily toward embedded systems,
+ 	  while striving to be fully functional and RFC compliant.
+@@ -49,6 +50,7 @@ config DHCPD_LEASES_FILE
+ config APP_UDHCPC
+ 	bool "udhcp client (udhcpc)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  udhcpc is a DHCP client geared primarily toward embedded systems,
+ 	  while striving to be fully functional and RFC compliant.
+diff --git a/procps/Config.in b/procps/Config.in
+index 9146ff6..a024c2d 100644
+--- a/procps/Config.in
++++ b/procps/Config.in
+@@ -8,6 +8,7 @@ menu "Process Utilities"
+ config FREE
+ 	bool "free"
+ 	default n
++	depends on PLATFORM_LINUX #sysinfo()
+ 	help
+ 	  free displays the total amount of free and used physical and swap
+ 	  memory in the system, as well as the buffers used by the kernel.
+@@ -102,7 +103,7 @@ config FEATURE_PS_WIDE
+ config FEATURE_PS_TIME
+ 	bool "Enable time and elapsed time output"
+ 	default n
+-	depends on PS && DESKTOP
++	depends on PS && DESKTOP && PLATFORM_LINUX #sysinfo()
+ 	help
+ 	  Support -o time and -o etime output specifiers.
+ 
+@@ -191,6 +192,7 @@ config FEATURE_TOPMEM
+ config UPTIME
+ 	bool "uptime"
+ 	default n
++	depends on PLATFORM_LINUX #sysinfo()
+ 	help
+ 	  uptime gives a one line display of the current time, how long
+ 	  the system has been running, how many users are currently logged
+diff --git a/shell/Config.in b/shell/Config.in
+index cf15193..6ae54d1 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -349,6 +349,7 @@ config FEATURE_SH_NOFORK
+ config CTTYHACK
+ 	bool "cttyhack"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  One common problem reported on the mailing list is "can't access tty;
+ 	  job control turned off" error message which typically appears when
+diff --git a/sysklogd/Config.in b/sysklogd/Config.in
+index 0664be0..20940be 100644
+--- a/sysklogd/Config.in
++++ b/sysklogd/Config.in
+@@ -97,6 +97,7 @@ config FEATURE_LOGREAD_REDUCED_LOCKING
+ config KLOGD
+ 	bool "klogd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  klogd is a utility which intercepts and logs all
+ 	  messages from the Linux kernel and sends the messages
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 5f5adc0..b7fc332 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -8,6 +8,7 @@ menu "Linux System Utilities"
+ config ACPID
+ 	bool "acpid"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  acpid listens to ACPI events coming either in textual form from
+ 	  /proc/acpi/event (though it is marked deprecated it is still widely
+@@ -30,6 +31,7 @@ config FEATURE_ACPID_COMPAT
+ config BLKID
+ 	bool "blkid"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select VOLUMEID
+ 	help
+ 	  Lists labels and UUIDs of all filesystems.
+@@ -39,6 +41,7 @@ config BLKID
+ config DMESG
+ 	bool "dmesg"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  dmesg is used to examine or control the kernel ring buffer. When the
+ 	  Linux kernel prints messages to the system log, they are stored in
+@@ -72,6 +75,7 @@ config FEATURE_DMESG_PRETTY
+ config FBSET
+ 	bool "fbset"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  fbset is used to show or change the settings of a Linux frame buffer
+ 	  device. The frame buffer device provides a simple and unique
+@@ -100,6 +104,7 @@ config FEATURE_FBSET_READMODE
+ config FDFLUSH
+ 	bool "fdflush"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  fdflush is only needed when changing media on slightly-broken
+ 	  removable media drives. It is used to make Linux believe that a
+@@ -112,12 +117,14 @@ config FDFLUSH
+ config FDFORMAT
+ 	bool "fdformat"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  fdformat is used to low-level format a floppy disk.
+ 
+ config FDISK
+ 	bool "fdisk"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The fdisk utility is used to divide hard disks into one or more
+ 	  logical disks, which are generally called partitions. This utility
+@@ -185,6 +192,7 @@ config FEATURE_FDISK_ADVANCED
+ config FINDFS
+ 	bool "findfs"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select VOLUMEID
+ 	help
+ 	  Prints the name of a filesystem with given label or UUID.
+@@ -194,6 +202,7 @@ config FINDFS
+ config FREERAMDISK
+ 	bool "freeramdisk"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Linux allows you to create ramdisks. This utility allows you to
+ 	  delete them and completely free all memory that was used for the
+@@ -216,6 +225,7 @@ config FSCK_MINIX
+ config MKFS_MINIX
+ 	bool "mkfs_minix"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The minix filesystem is a nice, small, compact, read-write filesystem
+ 	  with little overhead. If you wish to be able to create minix
+@@ -236,6 +246,7 @@ config FEATURE_MINIX2
+ config MKFS_VFAT
+ 	bool "mkfs_vfat"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Utility to create FAT32 filesystems.
+ 
+@@ -284,6 +295,7 @@ config HD
+ config HWCLOCK
+ 	bool "hwclock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The hwclock utility is used to read and set the hardware clock
+ 	  on a system. This is primarily used to set the current time on
+@@ -331,6 +343,7 @@ config IPCS
+ config LOSETUP
+ 	bool "losetup"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  losetup is used to associate or detach a loop device with a regular
+ 	  file or block device, and to query the status of a loop device. This
+@@ -339,6 +352,7 @@ config LOSETUP
+ config MDEV
+ 	bool "mdev"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  mdev is a mini-udev implementation for dynamically creating device
+ 	  nodes in the /dev directory.
+@@ -645,6 +659,7 @@ config FEATURE_VOLUMEID_LINUXRAID
+ config MOUNT
+ 	bool "mount"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  All files and filesystems in Unix are arranged into one big directory
+ 	  tree. The 'mount' utility is used to graft a filesystem onto a
+@@ -726,6 +741,7 @@ config FEATURE_MOUNT_FSTAB
+ config PIVOT_ROOT
+ 	bool "pivot_root"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The pivot_root utility swaps the mount points for the root filesystem
+ 	  with some other mounted filesystem. This allows you to do all sorts
+@@ -753,12 +769,14 @@ config RDEV
+ config READPROFILE
+ 	bool "readprofile"
+ 	default n
++	#depends on PLATFORM_LINUX
+ 	help
+ 	  This allows you to parse /proc/profile for basic profiling.
+ 
+ config RTCWAKE
+ 	bool "rtcwake"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Enter a system sleep state until specified wakeup time.
+ 
+@@ -778,6 +796,7 @@ config SCRIPTREPLAY
+ config SETARCH
+ 	bool "setarch"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The linux32 utility is used to create a 32bit environment for the
+ 	  specified program (usually a shell). It only makes sense to have
+@@ -787,6 +806,7 @@ config SETARCH
+ config SWAPONOFF
+ 	bool "swaponoff"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This option enables both the 'swapon' and the 'swapoff' utilities.
+ 	  Once you have created some swap space using 'mkswap', you also need
+@@ -805,6 +825,7 @@ config FEATURE_SWAPON_PRI
+ config SWITCH_ROOT
+ 	bool "switch_root"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The switch_root utility is used from initramfs to select a new
+ 	  root device. Under initramfs, you have to use this instead of
+@@ -824,6 +845,7 @@ config SWITCH_ROOT
+ config UMOUNT
+ 	bool "umount"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  When you want to remove a mounted filesystem from its current mount
+ 	  point, for example when you are shutting down the system, the
+@@ -843,7 +865,7 @@ comment "Common options for mount/umount"
+ config FEATURE_MOUNT_LOOP
+ 	bool "Support loopback mounts"
+ 	default n
+-	depends on MOUNT || UMOUNT
++	depends on (MOUNT || UMOUNT) && PLATFORM_LINUX
+ 	help
+ 	  Enabling this feature allows automatic mounting of files (containing
+ 	  filesystem images) via the linux kernel's loopback devices.
+
+commit c7d180b7b02a591ef134e1c7f086ea46d9f92095
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:37:32 2010 +0200
+
+    init,loginutils: termios portability fixes
+
+diff --git a/init/init.c b/init/init.c
+index 35f64cf..5f60f3b 100644
+--- a/init/init.c
++++ b/init/init.c
+@@ -14,8 +14,16 @@
+ #include <paths.h>
+ #include <sys/reboot.h>
+ #include <sys/resource.h>
++#ifdef __linux__
+ #include <linux/vt.h>
++#endif
+ 
++/* Used only for sanitizing purposes in set_sane_term() below. On systems where
++ * the baud rate is stored in a separate field, we can safely disable them. */
++#ifndef CBAUD
++# define CBAUD 0
++# define CBAUDEX 0
++#endif
+ 
+ /* Was a CONFIG_xxx option. A lot of people were building
+  * not fully functional init by switching it on! */
+@@ -164,7 +172,9 @@ static void message(int where, const char *fmt, ...)
+ 
+ static void console_init(void)
+ {
++#ifdef VT_OPENQRY
+ 	int vtno;
++#endif
+ 	char *s;
+ 
+ 	s = getenv("CONSOLE");
+@@ -188,6 +198,7 @@ static void console_init(void)
+ 	}
+ 
+ 	s = getenv("TERM");
++#ifdef VT_OPENQRY
+ 	if (ioctl(STDIN_FILENO, VT_OPENQRY, &vtno) != 0) {
+ 		/* Not a linux terminal, probably serial console.
+ 		 * Force the TERM setting to vt102
+@@ -196,7 +207,9 @@ static void console_init(void)
+ 			putenv((char*)"TERM=vt102");
+ 		if (!ENABLE_FEATURE_INIT_SYSLOG)
+ 			log_console = NULL;
+-	} else if (!s)
++	} else
++#endif
++	if (!s)
+ 		putenv((char*)"TERM=linux");
+ }
+ 
+@@ -218,8 +231,10 @@ static void set_sane_term(void)
+ 	tty.c_cc[VSTOP] = 19;	/* C-s */
+ 	tty.c_cc[VSUSP] = 26;	/* C-z */
+ 
++#ifdef __linux__
+ 	/* use line discipline 0 */
+ 	tty.c_line = 0;
++#endif
+ 
+ 	/* Make it be sane */
+ 	tty.c_cflag &= CBAUD | CBAUDEX | CSIZE | CSTOPB | PARENB | PARODD;
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index 79249d1..83e5a5b 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -177,7 +177,6 @@ config DELUSER
+ config GETTY
+ 	bool "getty"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  getty lets you log in on a tty, it is normally invoked by init.
+@@ -201,7 +200,6 @@ config FEATURE_WTMP
+ config LOGIN
+ 	bool "login"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	select FEATURE_SUID
+ 	select FEATURE_SYSLOG
+ 	help
+diff --git a/loginutils/getty.c b/loginutils/getty.c
+index 838adf2..bb38507 100644
+--- a/loginutils/getty.c
++++ b/loginutils/getty.c
+@@ -282,10 +282,8 @@ static void termios_init(struct termios *tp, int speed, struct options *op)
+ 	 * reads will be done in raw mode anyway. Errors will be dealt with
+ 	 * later on.
+ 	 */
+-#ifdef __linux__
+ 	/* flush input and output queues, important for modems! */
+-	ioctl(0, TCFLSH, TCIOFLUSH); /* tcflush(0, TCIOFLUSH)? - same */
+-#endif
++	tcflush(0, TCIOFLUSH);
+ 	ispeed = ospeed = speed;
+ 	if (speed == B0) {
+ 		/* Speed was specified as "0" on command line.
+@@ -299,10 +297,13 @@ static void termios_init(struct termios *tp, int speed, struct options *op)
+ 	cfsetispeed(tp, ispeed);
+ 	cfsetospeed(tp, ospeed);
+ 
+-	tp->c_iflag = tp->c_lflag = tp->c_line = 0;
++	tp->c_iflag = tp->c_lflag = 0;
+ 	tp->c_oflag = OPOST | ONLCR;
+ 	tp->c_cc[VMIN] = 1;
+ 	tp->c_cc[VTIME] = 0;
++#ifdef __linux__
++	tp->c_line = 0;
++#endif
+ 
+ 	/* Optionally enable hardware flow control */
+ #ifdef CRTSCTS
+@@ -360,10 +361,8 @@ static void auto_baud(char *buf, unsigned size_buf, struct termios *tp)
+ 		for (bp = buf; bp < buf + nread; bp++) {
+ 			if (isdigit(*bp)) {
+ 				speed = bcode(bp);
+-				if (speed > 0) {
+-					tp->c_cflag &= ~CBAUD;
+-					tp->c_cflag |= speed;
+-				}
++				if (speed > 0)
++					cfsetspeed(tp, speed);
+ 				break;
+ 			}
+ 		}
+@@ -417,7 +416,7 @@ static char *get_logname(char *logname, unsigned size_logname,
+ 
+ 	/* Flush pending input (esp. after parsing or switching the baud rate). */
+ 	sleep(1);
+-	ioctl(0, TCFLSH, TCIFLUSH); /* tcflush(0, TCIOFLUSH)? - same */
++	tcflush(0, TCIOFLUSH);
+ 
+ 	/* Prompt for and read a login name. */
+ 	logname[0] = '\0';
+@@ -525,7 +524,9 @@ static void termios_final(struct options *op, struct termios *tp, struct chardat
+ 	tp->c_cc[VQUIT] = DEF_QUIT;     /* default quit */
+ 	tp->c_cc[VEOF] = DEF_EOF;       /* default EOF character */
+ 	tp->c_cc[VEOL] = DEF_EOL;
++#ifdef VSWTC
+ 	tp->c_cc[VSWTC] = DEF_SWITCH;   /* default switch character */
++#endif
+ 
+ 	/* Account for special characters seen in input. */
+ 	if (cp->eol == CR) {
+@@ -571,8 +572,8 @@ static void termios_final(struct options *op, struct termios *tp, struct chardat
+ #endif
+ 
+ 	/* Finally, make the new settings effective */
+-	/* It's tcsetattr_stdin_TCSANOW() + error check */
+-	ioctl_or_perror_and_die(0, TCSETS, tp, "%s: TCSETS", op->tty);
++	if(tcsetattr_stdin_TCSANOW(tp) < 0)
++		bb_perror_msg_and_die("%s: tcsetattr", op->tty);
+ }
+ 
+ #if ENABLE_FEATURE_UTMP
+@@ -703,8 +704,8 @@ int getty_main(int argc UNUSED_PARAM, char **argv)
+ 	 * by patching the SunOS kernel variable "zsadtrlow" to a larger value;
+ 	 * 5 seconds seems to be a good value.
+ 	 */
+-	/* tcgetattr() + error check */
+-	ioctl_or_perror_and_die(0, TCGETS, &termios, "%s: TCGETS", options.tty);
++	if(tcgetattr(0, &termios) < 0)
++		bb_perror_msg_and_die("%s: tcgetattr", options.tty);
+ 
+ #ifdef __linux__
+ // FIXME: do we need this? Otherwise "-" case seems to be broken...
+diff --git a/loginutils/login.c b/loginutils/login.c
+index 31b25a4..2fd4a65 100644
+--- a/loginutils/login.c
++++ b/loginutils/login.c
+@@ -346,7 +346,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 	while (1) {
+ 		/* flush away any type-ahead (as getty does) */
+-		ioctl(0, TCFLSH, TCIFLUSH);
++		tcflush(0, TCIFLUSH);
+ 
+ 		if (!username[0])
+ 			get_username_or_die(username, sizeof(username));
+
+commit 11f95a40db05cc277c3c2fe4069160e22f148405
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:38:44 2010 +0200
+
+    init,halt: portability improvements
+    
+    * make init and halt use the same RB_* constants for reboot()
+    * conditionalize the Linux-specific code
+    
+    Inspired by init.init.diff from the Debian kFreeBSD patches at:
+    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian
+
+diff --git a/init/Config.in b/init/Config.in
+index e26b9e9..3d99d47 100644
+--- a/init/Config.in
++++ b/init/Config.in
+@@ -8,7 +8,6 @@ menu "Init Utilities"
+ config INIT
+ 	bool "init"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  init is the first program run when the system boots.
+@@ -91,7 +90,6 @@ config FEATURE_INITRD
+ config HALT
+ 	bool "poweroff, halt, and reboot"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	help
+ 	  Stop all processes and either halt, reboot, or power off the system.
+ 
+diff --git a/init/halt.c b/init/halt.c
+index c88c333..9876e7c 100644
+--- a/init/halt.c
++++ b/init/halt.c
+@@ -8,7 +8,7 @@
+  */
+ 
+ #include "libbb.h"
+-#include <sys/reboot.h>
++#include "reboot.h"
+ 
+ #if ENABLE_FEATURE_WTMP
+ #include <sys/utsname.h>
+@@ -36,14 +36,6 @@ static void write_wtmp(void)
+ #define write_wtmp() ((void)0)
+ #endif
+ 
+-#ifndef RB_HALT_SYSTEM
+-#define RB_HALT_SYSTEM RB_HALT
+-#endif
+-
+-#ifndef RB_POWER_OFF
+-#define RB_POWER_OFF RB_POWERDOWN
+-#endif
+-
+ int halt_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int halt_main(int argc UNUSED_PARAM, char **argv)
+ {
+diff --git a/init/init.c b/init/init.c
+index 5f60f3b..70550fa 100644
+--- a/init/init.c
++++ b/init/init.c
+@@ -12,11 +12,11 @@
+ #include "libbb.h"
+ #include <syslog.h>
+ #include <paths.h>
+-#include <sys/reboot.h>
+ #include <sys/resource.h>
+ #ifdef __linux__
+ #include <linux/vt.h>
+ #endif
++#include "reboot.h" /* reboot() constants */
+ 
+ /* Used only for sanitizing purposes in set_sane_term() below. On systems where
+  * the baud rate is stored in a separate field, we can safely disable them. */
+@@ -95,13 +95,6 @@ enum {
+ 	L_LOG = 0x1,
+ 	L_CONSOLE = 0x2,
+ 	MAYBE_CONSOLE = L_CONSOLE * !ENABLE_FEATURE_EXTRA_QUIET,
+-#ifndef RB_HALT_SYSTEM
+-	RB_HALT_SYSTEM = 0xcdef0123, /* FIXME: this overflows enum */
+-	RB_ENABLE_CAD = 0x89abcdef,
+-	RB_DISABLE_CAD = 0,
+-	RB_POWER_OFF = 0x4321fedc,
+-	RB_AUTOBOOT = 0x01234567,
+-#endif
+ };
+ 
+ /* Print a message to the specified device.
+@@ -737,10 +730,12 @@ static void restart_handler(int sig UNUSED_PARAM)
+ 		 */
+ 		run_shutdown_and_kill_processes();
+ 
++#ifdef RB_ENABLE_CAD
+ 		/* Allow Ctrl-Alt-Del to reboot the system.
+ 		 * This is how kernel sets it up for init, we follow suit.
+ 		 */
+ 		reboot(RB_ENABLE_CAD); /* misnomer */
++#endif
+ 
+ 		if (open_stdio_to_tty(a->terminal)) {
+ 			dbg_message(L_CONSOLE, "Trying to re-exec %s", a->command);
+@@ -849,9 +844,11 @@ int init_main(int argc UNUSED_PARAM, char **argv)
+ 		) {
+ 			bb_show_usage();
+ 		}
++#ifdef RB_DISABLE_CAD
+ 		/* Turn off rebooting via CTL-ALT-DEL - we get a
+ 		 * SIGINT on CAD so we can shut things down gracefully... */
+ 		reboot(RB_DISABLE_CAD); /* misnomer */
++#endif
+ 	}
+ 
+ 	/* Figure out where the default console should be */
+@@ -872,6 +869,8 @@ int init_main(int argc UNUSED_PARAM, char **argv)
+ 	/* Hello world */
+ 	message(MAYBE_CONSOLE | L_LOG, "init started: %s", bb_banner);
+ 
++/* struct sysinfo is linux-specific */
++#ifdef __linux__
+ 	/* Make sure there is enough memory to do something useful. */
+ 	if (ENABLE_SWAPONOFF) {
+ 		struct sysinfo info;
+@@ -887,6 +886,7 @@ int init_main(int argc UNUSED_PARAM, char **argv)
+ 			run_actions(SYSINIT);   /* wait and removing */
+ 		}
+ 	}
++#endif
+ 
+ 	/* Check if we are supposed to be in single user mode */
+ 	if (argv[1]
+diff --git a/init/reboot.h b/init/reboot.h
+new file mode 100644
+index 0000000..ff045fd
+--- /dev/null
++++ b/init/reboot.h
+@@ -0,0 +1,31 @@
++/*
++ * Definitions related to the reboot() system call,
++ * shared between init.c and halt.c.
++ */
++
++#include <sys/reboot.h>
++
++#ifndef RB_HALT_SYSTEM
++# if defined(__linux__)
++#  define RB_HALT_SYSTEM  0xcdef0123
++#  define RB_ENABLE_CAD   0x89abcdef
++#  define RB_DISABLE_CAD  0
++#  define RB_POWER_OFF    0x4321fedc
++#  define RB_AUTOBOOT     0x01234567
++# elif defined(RB_HALT)
++#  define RB_HALT_SYSTEM  RB_HALT
++# endif
++#endif
++
++/* Stop system and switch power off if possible.  */
++#ifndef RB_POWER_OFF
++# if defined(RB_POWERDOWN)
++#  define RB_POWER_OFF  RB_POWERDOWN
++# elif defined(__linux__)
++#  define RB_POWER_OFF  0x4321fedc
++# else
++#  warning "poweroff unsupported, using halt as fallback"
++#  define RB_POWER_OFF  RB_HALT_SYSTEM
++# endif
++#endif
++
+
+commit 39695637c3c157cc6d96939c243e310c8c726b75
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:07 2010 +0200
+
+    init: make the initial $TERM value configurable
+
+diff --git a/init/Config.in b/init/Config.in
+index 3d99d47..0fe4343 100644
+--- a/init/Config.in
++++ b/init/Config.in
+@@ -87,6 +87,18 @@ config FEATURE_INITRD
+ 	  This does not apply to initramfs, which runs /init as PID 1 and
+ 	  requires no special support.
+ 
++config INIT_TERMINAL_TYPE
++	string "Initial terminal type"
++	default "linux"
++	depends on INIT
++	help
++	  This is the initial value set by init for the TERM environment
++	  variable. This variable is used by programs which make use of
++	  extended terminal capabilities.
++
++	  Note that on Linux, init attempts to detect serial terminal and
++	  sets TERM to "vt102" if one is found.
++
+ config HALT
+ 	bool "poweroff, halt, and reboot"
+ 	default n
+diff --git a/init/init.c b/init/init.c
+index 70550fa..4743cec 100644
+--- a/init/init.c
++++ b/init/init.c
+@@ -203,7 +203,7 @@ static void console_init(void)
+ 	} else
+ #endif
+ 	if (!s)
+-		putenv((char*)"TERM=linux");
++		putenv((char*)"TERM=" CONFIG_INIT_TERMINAL_TYPE);
+ }
+ 
+ /* Set terminal settings to reasonable defaults.
+
+commit cdcfb0b2a40b4ab760967c4e97e0920ec8e6c3dd
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:29 2010 +0200
+
+    libbb.h: add device names for Hurd and FreeBSD
+    
+    Adapted from include.libbb.diff from the Debian kFreeBSD people:
+    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian
+
+diff --git a/include/libbb.h b/include/libbb.h
+index a4ad6ed..24ebe9e 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -1496,7 +1496,27 @@ extern const char bb_default_login_shell[];
+ /* "sh" */
+ #define DEFAULT_SHELL_SHORT_NAME     (bb_default_login_shell+6)
+ 
+-#if ENABLE_FEATURE_DEVFS
++/* The following devices are the same on all systems.  */
++#define CURRENT_TTY "/dev/tty"
++#define DEV_CONSOLE "/dev/console"
++
++#if defined(__FreeBSD_kernel__)
++# define CURRENT_VC CURRENT_TTY
++# define VC_1 "/dev/ttyv0"
++# define VC_2 "/dev/ttyv1"
++# define VC_3 "/dev/ttyv2"
++# define VC_4 "/dev/ttyv3"
++# define VC_5 "/dev/ttyv4"
++# define VC_FORMAT "/dev/ttyv%d"
++#elif defined(__GNU__)
++# define CURRENT_VC CURRENT_TTY
++# define VC_1 "/dev/tty1"
++# define VC_2 "/dev/tty2"
++# define VC_3 "/dev/tty3"
++# define VC_4 "/dev/tty4"
++# define VC_5 "/dev/tty5"
++# define VC_FORMAT "/dev/tty%d"
++#elif ENABLE_FEATURE_DEVFS /* from now on, assume Linux naming */
+ # define CURRENT_VC "/dev/vc/0"
+ # define VC_1 "/dev/vc/1"
+ # define VC_2 "/dev/vc/2"
+@@ -1543,10 +1563,6 @@ extern const char bb_default_login_shell[];
+ # define FB_0 "/dev/fb0"
+ #endif
+ 
+-/* The following devices are the same on devfs and non-devfs systems.  */
+-#define CURRENT_TTY "/dev/tty"
+-#define DEV_CONSOLE "/dev/console"
+-
+ 
+ #ifndef RB_POWER_OFF
+ /* Stop system and switch power off if possible.  */
+
+commit df6a5da042956bca95b3828dae08a876137603c4
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:33 2010 +0200
+
+    mkdir: fix -p on FreeBSD
+    
+    This patch is libbb.make_directory.diff from Debian kFreeBSD at:
+    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian
+
+diff --git a/libbb/make_directory.c b/libbb/make_directory.c
+index 391493c..9843270 100644
+--- a/libbb/make_directory.c
++++ b/libbb/make_directory.c
+@@ -61,7 +61,7 @@ int FAST_FUNC bb_make_directory(char *path, long mode, int flags)
+ 		if (mkdir(path, 0777) < 0) {
+ 			/* If we failed for any other reason than the directory
+ 			 * already exists, output a diagnostic and return -1. */
+-			if (errno != EEXIST
++			if ((errno != EEXIST && errno != EISDIR)
+ 			 || !(flags & FILEUTILS_RECUR)
+ 			 || ((stat(path, &st) < 0) || !S_ISDIR(st.st_mode))
+ 			) {
+
+commit 2873b13b4a7e08eb464a25173775489e66ac46ca
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:59:58 2010 +0200
+
+    klogd: support /dev/klog in addition to klogctl()
+    
+    The klogctl() interface allows reading past messages from the kernel's
+    ring buffer, but is Linux-specific. The more portable method of reading
+    from _PATH_KLOG is added as an alternative.
+    
+    Adapted from the Debian kFreeBSD patch at:
+    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian/klogd.diff
+
+diff --git a/sysklogd/Config.in b/sysklogd/Config.in
+index 20940be..40601ad 100644
+--- a/sysklogd/Config.in
++++ b/sysklogd/Config.in
+@@ -97,7 +97,6 @@ config FEATURE_LOGREAD_REDUCED_LOCKING
+ config KLOGD
+ 	bool "klogd"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	help
+ 	  klogd is a utility which intercepts and logs all
+ 	  messages from the Linux kernel and sends the messages
+@@ -105,6 +104,25 @@ config KLOGD
+ 	  you wish to record the messages produced by the kernel,
+ 	  you should enable this option.
+ 
++config FEATURE_KLOGD_KLOGCTL
++	bool "Use the klogctl() interface"
++	default y
++	depends on KLOGD && PLATFORM_LINUX
++	help
++	  The klogd applet supports two interfaces for reading
++	  kernel messages. Linux provides the klogctl() interface
++	  which allows reading past messages from the kernel
++	  ring buffer as well as future messages as they are
++	  emitted.
++
++	  If you answer 'N' here, klogd will use the more portable
++	  approach of reading them from /proc or a device node.
++	  However, this method requires the file to be available and
++	  will only log the messages emitted after klogd is started.
++	  Furthermore it does not support changing the console log level.
++
++	  If in doubt, say 'Y'.
++
+ config LOGGER
+ 	bool "logger"
+ 	default n
+diff --git a/sysklogd/klogd.c b/sysklogd/klogd.c
+index c54e80a..1b2fdf2 100644
+--- a/sysklogd/klogd.c
++++ b/sysklogd/klogd.c
+@@ -19,14 +19,86 @@
+ 
+ #include "libbb.h"
+ #include <syslog.h>
+-#include <sys/klog.h>
+ 
+-static void klogd_signal(int sig)
++
++/* The klogctl(3) interface allows us to read past and future messages alike.
++ * Alternatively, we read the messages from _PATH_KLOG. */
++
++#if ENABLE_FEATURE_KLOGD_KLOGCTL
++# include <sys/klog.h>
++
++static inline void klogd_open(void)
++{
++	/* "Open the log. Currently a NOP" */
++	klogctl(1, NULL, 0);
++}
++
++static inline void klogd_close(void)
+ {
+ 	/* FYI: cmd 7 is equivalent to setting console_loglevel to 7
+ 	 * via klogctl(8, NULL, 7). */
+ 	klogctl(7, NULL, 0); /* "7 -- Enable printk's to console" */
+ 	klogctl(0, NULL, 0); /* "0 -- Close the log. Currently a NOP" */
++}
++
++static inline int klogd_read(char *bufp, int len)
++{
++	return klogctl(2, bufp, len);
++}
++
++static inline void klogd_setloglevel(int lvl)
++{
++	/* "printk() prints a message on the console only if it has a loglevel
++	 * less than console_loglevel". Here we set console_loglevel = lvl. */
++	klogctl(8, NULL, lvl);
++}
++
++#else
++# include <paths.h>
++# ifndef _PATH_KLOG
++#  ifdef __GNU__
++#   define _PATH_KLOG "/dev/klog"
++#  else
++#   error "your system's _PATH_KLOG is unknown"
++#  endif
++# endif
++
++/* FIXME: consumes global static memory */
++static int klogfd = 0;
++
++static inline void klogd_open(void)
++{
++	klogfd = open(_PATH_KLOG, O_RDONLY, 0);
++	if (klogfd < 0) {
++		syslog(LOG_ERR, "klogd: can't open "_PATH_KLOG" (error %d: %m)",
++				errno);
++		exit(EXIT_FAILURE);
++	}
++}
++
++static inline void klogd_close(void)
++{
++	if (klogfd != 0)
++		close(klogfd);
++}
++
++static inline int klogd_read(char *bufp, int len)
++{
++	return read(klogfd, bufp, len);
++}
++
++static inline void klogd_setloglevel(int lvl UNUSED_PARAM)
++{
++	syslog(LOG_WARNING, "klogd warning: this build does not support"
++			" changing the console log level");
++}
++
++#endif
++
++
++static void klogd_signal(int sig)
++{
++	klogd_close();
+ 	syslog(LOG_NOTICE, "klogd: exiting");
+ 	kill_myself_with_sig(sig);
+ }
+@@ -60,13 +132,10 @@ int klogd_main(int argc UNUSED_PARAM, char **argv)
+ 	bb_signals(BB_FATAL_SIGS, klogd_signal);
+ 	signal(SIGHUP, SIG_IGN);
+ 
+-	/* "Open the log. Currently a NOP" */
+-	klogctl(1, NULL, 0);
++	klogd_open();
+ 
+-	/* "printk() prints a message on the console only if it has a loglevel
+-	 * less than console_loglevel". Here we set console_loglevel = i. */
+ 	if (i)
+-		klogctl(8, NULL, i);
++		klogd_setloglevel(i);
+ 
+ 	syslog(LOG_NOTICE, "klogd started: %s", bb_banner);
+ 
+@@ -77,7 +146,7 @@ int klogd_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 		/* "2 -- Read from the log." */
+ 		start = log_buffer + used;
+-		n = klogctl(2, start, KLOGD_LOGBUF_SIZE-1 - used);
++		n = klogd_read(start, KLOGD_LOGBUF_SIZE-1 - used);
+ 		if (n < 0) {
+ 			if (errno == EINTR)
+ 				continue;
+
+commit 92dbab84d710e69894b0442e52cf95f2e4cb7336
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:39:24 2010 +0200
+
+    libbb: conditionalize AF_* usage in error reporting
+
+diff --git a/libbb/xfuncs_printf.c b/libbb/xfuncs_printf.c
+index 5f56b36..2f07343 100644
+--- a/libbb/xfuncs_printf.c
++++ b/libbb/xfuncs_printf.c
+@@ -418,8 +418,12 @@ int FAST_FUNC xsocket(int domain, int type, int protocol)
+ 		/* Hijack vaguely related config option */
+ #if ENABLE_VERBOSE_RESOLUTION_ERRORS
+ 		const char *s = "INET";
++# ifdef AF_PACKET
+ 		if (domain == AF_PACKET) s = "PACKET";
++# endif
++# ifdef AF_NETLINK
+ 		if (domain == AF_NETLINK) s = "NETLINK";
++# endif
+ IF_FEATURE_IPV6(if (domain == AF_INET6) s = "INET6";)
+ 		bb_perror_msg_and_die("socket(AF_%s)", s);
+ #else
+diff --git a/networking/Config.in b/networking/Config.in
+index 0cdf448..18df278 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -41,7 +41,6 @@ config FEATURE_PREFER_IPV4_ADDRESS
+ config VERBOSE_RESOLUTION_ERRORS
+ 	bool "Verbose resolution errors"
+ 	default n
+-	depends on PLATFORM_LINUX #because of xsocket() in libbb/xfuncs_prinf.c
+ 	help
+ 	  Enable if you are not satisfied with simplistic
+ 	  "can't resolve 'hostname.com'" and want to know more.
+
+commit 8452cd67139829d47873aeffec17e1443c9b88c7
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:20 2010 +0200
+
+    stty: fix undefined IDX_* on missing termios constants
+
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 6648111..cacfb96 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -606,7 +606,6 @@ config FEATURE_STAT_FORMAT
+ config STTY
+ 	bool "stty"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	help
+ 	  stty is used to change and print terminal line settings.
+ 
+diff --git a/coreutils/stty.c b/coreutils/stty.c
+index e02fe7c..3b533d0 100644
+--- a/coreutils/stty.c
++++ b/coreutils/stty.c
+@@ -1088,27 +1088,32 @@ static void set_mode(const struct mode_info *info, int reversed,
+ 			mode->c_cc[VTIME] = 0;
+ 		}
+ 	}
+-	else if (IXANY && info == &mode_info[IDX_decctlq]) {
++#if IXANY
++	else if (info == &mode_info[IDX_decctlq]) {
+ 		if (reversed)
+ 			mode->c_iflag |= IXANY;
+ 		else
+ 			mode->c_iflag &= ~IXANY;
+ 	}
+-	else if (TABDLY && info == &mode_info[IDX_tabs]) {
++#endif
++#if TABDLY
++	else if (info == &mode_info[IDX_tabs]) {
+ 		if (reversed)
+ 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB3;
+ 		else
+ 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB0;
+ 	}
+-	else if (OXTABS && info == &mode_info[IDX_tabs]) {
++#endif
++#if OXTABS	
++	else if (info == &mode_info[IDX_tabs]) {
+ 		if (reversed)
+ 			mode->c_oflag |= OXTABS;
+ 		else
+ 			mode->c_oflag &= ~OXTABS;
+-	} else
+-	if (XCASE && IUCLC && OLCUC
+-	 && (info == &mode_info[IDX_lcase] || info == &mode_info[IDX_LCASE])
+-	) {
++	}
++#endif
++#if XCASE && IUCLC && OLCUC
++	else if (info==&mode_info[IDX_lcase] || info==&mode_info[IDX_LCASE]) {
+ 		if (reversed) {
+ 			mode->c_lflag &= ~XCASE;
+ 			mode->c_iflag &= ~IUCLC;
+@@ -1118,7 +1123,9 @@ static void set_mode(const struct mode_info *info, int reversed,
+ 			mode->c_iflag |= IUCLC;
+ 			mode->c_oflag |= OLCUC;
+ 		}
+-	} else if (info == &mode_info[IDX_crt]) {
++	}
++#endif
++	else if (info == &mode_info[IDX_crt]) {
+ 		mode->c_lflag |= ECHOE | ECHOCTL | ECHOKE;
+ 	} else if (info == &mode_info[IDX_dec]) {
+ 		mode->c_cc[VINTR] = 3; /* ^C */
+
+commit f861b6ffab812d3113118a8f56f67147156c5a7e
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:10 2010 +0200
+
+    cttyhack: serial console detection is Linux-specific
+
+diff --git a/shell/Config.in b/shell/Config.in
+index 6ae54d1..cf15193 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -349,7 +349,6 @@ config FEATURE_SH_NOFORK
+ config CTTYHACK
+ 	bool "cttyhack"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	help
+ 	  One common problem reported on the mailing list is "can't access tty;
+ 	  job control turned off" error message which typically appears when
+diff --git a/shell/cttyhack.c b/shell/cttyhack.c
+index 572a3af..5d8b9b2 100644
+--- a/shell/cttyhack.c
++++ b/shell/cttyhack.c
+@@ -53,13 +53,19 @@ int cttyhack_main(int argc UNUSED_PARAM, char **argv)
+ 	}
+ 
+ 	strcpy(console, "/dev/tty");
++
++#ifdef TIOCGSERIAL
+ 	if (ioctl(0, TIOCGSERIAL, &u.sr) == 0) {
+ 		/* this is a serial console */
+ 		sprintf(console + 8, "S%d", u.sr.line);
+-	} else if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
++	}
++#endif
++#ifdef __linux__
++	if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
+ 		/* this is linux virtual tty */
+ 		sprintf(console + 8, "S%d" + 1, u.vt.v_active);
+ 	}
++#endif
+ 
+ 	if (console[8]) {
+ 		fd = xopen(console, O_RDWR);
+
+commit 585f610e02ce741654d437a48f3310086c4c8fa3
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:25 2010 +0200
+
+    tcpsvd,udpsvd: conditionalize usage of SO_ORIGINAL_DST
+    
+    On systems without this call, $TCPORIGDSTADDR is not set.
+
+diff --git a/networking/Config.in b/networking/Config.in
+index 18df278..3fe64ac 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -945,7 +945,6 @@ config ZCIP
+ config TCPSVD
+ 	bool "tcpsvd"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	help
+ 	  tcpsvd listens on a TCP port and runs a program for each new
+ 	  connection.
+@@ -968,7 +967,6 @@ config FEATURE_TUNCTL_UG
+ config UDPSVD
+ 	bool "udpsvd"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	help
+ 	  udpsvd listens on an UDP port and runs a program for each new
+ 	  connection.
+diff --git a/networking/tcpudp.c b/networking/tcpudp.c
+index 98a2aa8..70bf5dd 100644
+--- a/networking/tcpudp.c
++++ b/networking/tcpudp.c
+@@ -30,9 +30,12 @@
+  */
+ 
+ #include "libbb.h"
++
+ /* Wants <limits.h> etc, thus included after libbb.h: */
++#ifdef __linux__
+ #include <linux/types.h> /* for __be32 etc */
+ #include <linux/netfilter_ipv4.h>
++#endif
+ 
+ // TODO: move into this file:
+ #include "tcpudp_perhost.h"
+@@ -465,6 +468,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
+ 			/* setup ucspi env */
+ 			const char *proto = tcp ? "TCP" : "UDP";
+ 
++#ifdef SO_ORIGINAL_DST
+ 			/* Extract "original" destination addr:port
+ 			 * from Linux firewall. Useful when you redirect
+ 			 * an outbond connection to local handler, and it needs
+@@ -474,6 +478,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
+ 				xsetenv_plain("TCPORIGDSTADDR", addr);
+ 				free(addr);
+ 			}
++#endif
+ 			xsetenv_plain("PROTO", proto);
+ 			xsetenv_proto(proto, "LOCALADDR", local_addr);
+ 			xsetenv_proto(proto, "REMOTEADDR", remote_addr);
+
+commit edc4fed8fd174979db1ddd1abf549bf7a2693f67
+Author: Jeremie Koenig <jk@jk.fr.eu.org>
+Date:   Thu May 27 15:46:23 2010 +0200
+
+    vlock: disable linux console calls on other systems
+
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index 83e5a5b..f6c0e2e 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -309,7 +309,6 @@ config SULOGIN
+ config VLOCK
+ 	bool "vlock"
+ 	default n
+-	depends on PLATFORM_LINUX
+ 	select FEATURE_SUID
+ 	help
+ 	  Build the "vlock" applet which allows you to lock (virtual) terminals.
+diff --git a/loginutils/vlock.c b/loginutils/vlock.c
+index 85f489c..59aeb54 100644
+--- a/loginutils/vlock.c
++++ b/loginutils/vlock.c
+@@ -15,9 +15,11 @@
+ /* Fixed by Erik Andersen to do passwords the tinylogin way...
+  * It now works with md5, sha1, etc passwords. */
+ 
+-#include <sys/vt.h>
+ #include "libbb.h"
+ 
++#ifdef __linux__
++#include <sys/vt.h>
++
+ static void release_vt(int signo UNUSED_PARAM)
+ {
+ 	/* If -a, param is 0, which means:
+@@ -30,14 +32,17 @@ static void acquire_vt(int signo UNUSED_PARAM)
+ 	/* ACK to kernel that switch to console is successful */
+ 	ioctl(STDIN_FILENO, VT_RELDISP, VT_ACKACQ);
+ }
++#endif
+ 
+ int vlock_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ {
++#ifdef __linux__
+ 	struct vt_mode vtm;
++	struct vt_mode ovtm;
++#endif
+ 	struct termios term;
+ 	struct termios oterm;
+-	struct vt_mode ovtm;
+ 	struct passwd *pw;
+ 
+ 	pw = xgetpwuid(getuid());
+@@ -55,6 +60,7 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 		+ (1 << SIGINT )
+ 		, SIG_IGN);
+ 
++#ifdef __linux__
+ 	/* We will use SIGUSRx for console switch control: */
+ 	/* 1: set handlers */
+ 	signal_SA_RESTART_empty_mask(SIGUSR1, release_vt);
+@@ -62,12 +68,14 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 	/* 2: unmask them */
+ 	sig_unblock(SIGUSR1);
+ 	sig_unblock(SIGUSR2);
++#endif
+ 
+ 	/* Revert stdin/out to our controlling tty
+ 	 * (or die if we have none) */
+ 	xmove_fd(xopen(CURRENT_TTY, O_RDWR), STDIN_FILENO);
+ 	xdup2(STDIN_FILENO, STDOUT_FILENO);
+ 
++#ifdef __linux__
+ 	xioctl(STDIN_FILENO, VT_GETMODE, &vtm);
+ 	ovtm = vtm;
+ 	/* "console switches are controlled by us, not kernel!" */
+@@ -75,6 +83,7 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 	vtm.relsig = SIGUSR1;
+ 	vtm.acqsig = SIGUSR2;
+ 	ioctl(STDIN_FILENO, VT_SETMODE, &vtm);
++#endif
+ 
+ 	tcgetattr(STDIN_FILENO, &oterm);
+ 	term = oterm;
+@@ -95,7 +104,9 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 		puts("Password incorrect");
+ 	} while (1);
+ 
++#ifdef __linux__
+ 	ioctl(STDIN_FILENO, VT_SETMODE, &ovtm);
++#endif
+ 	tcsetattr_stdin_TCSANOW(&oterm);
+ 	fflush_stdout_and_exit(EXIT_SUCCESS);
+ }

@@ -4,3 +4,4 @@ applets-fallback.patch
 version.patch
 init-console.patch
 strip.patch
+osports.patch
