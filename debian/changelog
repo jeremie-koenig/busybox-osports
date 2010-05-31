@@ -1,3 +1,11 @@
+busybox (1:1.15.3-1jk1) unstable; urgency=low
+
+  * Non-maintainer non-upload.
+  * Add debian/patches/osports.patch for Hurd and kFreeBSD support
+  * Disable the PLATFORM_LINUX option when appropriate
+
+ -- Jeremie Koenig <jk@jk.fr.eu.org>  Mon, 31 May 2010 07:04:18 +0200
+
 busybox (1:1.15.3-1) unstable; urgency=low
 
   [ Bastian Blank ]
