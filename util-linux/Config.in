@@ -335,6 +335,7 @@ config IPCRM
 config IPCS
 	bool "ipcs"
 	default n
+	depends on PLATFORM_LINUX
 	select FEATURE_SUID
 	help
 	  The ipcs utility is used to provide information on the currently
