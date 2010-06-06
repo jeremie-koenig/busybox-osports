@@ -1,12 +1,182 @@
-commit bc1e30cc8e6ceff54e9b70b745929456336c9412
-Author: Jérémie Koenig <jk@jk.fr.eu.org>
-Date:   Fri Mar 26 19:08:53 2010 +0100
+Patch for busybox on Hurd and FreeBSD, see
+http://github.com/jeremie-koenig/busybox-osports/commits/osports-1.15.3
 
-    Hurd compat fixes. Mostly dealing with absent PATH_MAX
-    
-    Signed-off-by: Jérémie Koenig <jk@jk.fr.eu.org>
-    Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
-
+diff --git a/Config.in b/Config.in
+index 99f814e..054256f 100644
+--- a/Config.in
++++ b/Config.in
+@@ -30,6 +30,17 @@ config EXTRA_COMPAT
+ 	  some GNU extensions in libc. You probably only need this option
+ 	  if you plan to run busybox on desktop.
+ 
++config PLATFORM_LINUX
++	bool "Enable Linux-specific applets and features"
++	default y
++	help
++	  For the most part, busybox requires only POSIX compatibility
++	  from the target system, but some applets and features use
++	  Linux-specific interfaces.
++
++	  Answering 'N' here will disable such applets and hide the
++	  corresponding configuration options.
++
+ choice
+ 	prompt "Buffer allocation policy"
+ 	default FEATURE_BUFFERS_USE_MALLOC
+@@ -222,6 +233,7 @@ config FEATURE_SUID_CONFIG_QUIET
+ config SELINUX
+ 	bool "Support NSA Security Enhanced Linux"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Enable support for SELinux in applets ls, ps, and id. Also provide
+ 	  the option of compiling in SELinux applets.
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index cd0a931..ba72b21 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -8,6 +8,7 @@ menu "Console Utilities"
+ config CHVT
+ 	bool "chvt"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program is used to change to another terminal.
+ 	  Example: chvt 4 (change to terminal /dev/tty4)
+@@ -21,12 +22,14 @@ config CLEAR
+ config DEALLOCVT
+ 	bool "deallocvt"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program deallocates unused virtual consoles.
+ 
+ config DUMPKMAP
+ 	bool "dumpkmap"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program dumps the kernel's keyboard translation table to
+ 	  stdout, in binary format. You can then use loadkmap to load it.
+@@ -34,18 +37,21 @@ config DUMPKMAP
+ config KBD_MODE
+ 	bool "kbd_mode"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program reports and sets keyboard mode.
+ 
+ config LOADFONT
+ 	bool "loadfont"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program loads a console font from standard input.
+ 
+ config LOADKMAP
+ 	bool "loadkmap"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program loads a keyboard translation table from
+ 	  standard input.
+@@ -53,6 +59,7 @@ config LOADKMAP
+ config OPENVT
+ 	bool "openvt"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program is used to start a command on an unused
+ 	  virtual terminal.
+@@ -84,6 +91,7 @@ config FEATURE_RESIZE_PRINT
+ config SETCONSOLE
+ 	bool "setconsole"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program redirects the system console to another device,
+ 	  like the current tty while logged in via telnet.
+@@ -98,6 +106,7 @@ config FEATURE_SETCONSOLE_LONG_OPTIONS
+ config SETFONT
+ 	bool "setfont"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Allows to load console screen map. Useful for i18n.
+ 
+@@ -119,6 +128,7 @@ config DEFAULT_SETFONT_DIR
+ config SETKEYCODES
+ 	bool "setkeycodes"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program loads entries into the kernel's scancode-to-keycode
+ 	  map, allowing unusual keyboards to generate usable keycodes.
+@@ -126,12 +136,14 @@ config SETKEYCODES
+ config SETLOGCONS
+ 	bool "setlogcons"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This program redirects the output console of kernel messages.
+ 
+ config SHOWKEY
+ 	bool "showkey"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Shows keys pressed.
+ 
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index cacfb96..e933cba 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -591,6 +591,7 @@ config FEATURE_SPLIT_FANCY
+ config STAT
+ 	bool "stat"
+ 	default n
++	depends on PLATFORM_LINUX # statfs()
+ 	help
+ 	  display file or filesystem status.
+ 
+@@ -606,6 +607,7 @@ config FEATURE_STAT_FORMAT
+ config STTY
+ 	bool "stty"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  stty is used to change and print terminal line settings.
+ 
+diff --git a/coreutils/readlink.c b/coreutils/readlink.c
+index 20df38b..2ed5e2c 100644
+--- a/coreutils/readlink.c
++++ b/coreutils/readlink.c
+@@ -36,7 +36,6 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
+ {
+ 	char *buf;
+ 	char *fname;
+-	char pathbuf[PATH_MAX];
+ 
+ 	IF_FEATURE_READLINK_FOLLOW(
+ 		unsigned opt;
+@@ -56,7 +55,7 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
+ 		logmode = LOGMODE_NONE;
+ 
+ 	if (opt & 1) { /* -f */
+-		buf = realpath(fname, pathbuf);
++		buf = xmalloc_realpath(fname);
+ 	} else {
+ 		buf = xmalloc_readlink_or_warn(fname);
+ 	}
+@@ -65,7 +64,7 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
+ 		return EXIT_FAILURE;
+ 	printf((opt & 2) ? "%s" : "%s\n", buf);
+ 
+-	if (ENABLE_FEATURE_CLEAN_UP && !opt)
++	if (ENABLE_FEATURE_CLEAN_UP)
+ 		free(buf);
+ 
+ 	fflush_stdout_and_exit(EXIT_SUCCESS);
 diff --git a/coreutils/realpath.c b/coreutils/realpath.c
 index 28906ba..90a71ed 100644
 --- a/coreutils/realpath.c
@@ -45,6 +215,61 @@ index 28906ba..90a71ed 100644
 -
  	fflush_stdout_and_exit(retval);
  }
+diff --git a/coreutils/stty.c b/coreutils/stty.c
+index e02fe7c..3b533d0 100644
+--- a/coreutils/stty.c
++++ b/coreutils/stty.c
+@@ -1088,27 +1088,32 @@ static void set_mode(const struct mode_info *info, int reversed,
+ 			mode->c_cc[VTIME] = 0;
+ 		}
+ 	}
+-	else if (IXANY && info == &mode_info[IDX_decctlq]) {
++#if IXANY
++	else if (info == &mode_info[IDX_decctlq]) {
+ 		if (reversed)
+ 			mode->c_iflag |= IXANY;
+ 		else
+ 			mode->c_iflag &= ~IXANY;
+ 	}
+-	else if (TABDLY && info == &mode_info[IDX_tabs]) {
++#endif
++#if TABDLY
++	else if (info == &mode_info[IDX_tabs]) {
+ 		if (reversed)
+ 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB3;
+ 		else
+ 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB0;
+ 	}
+-	else if (OXTABS && info == &mode_info[IDX_tabs]) {
++#endif
++#if OXTABS	
++	else if (info == &mode_info[IDX_tabs]) {
+ 		if (reversed)
+ 			mode->c_oflag |= OXTABS;
+ 		else
+ 			mode->c_oflag &= ~OXTABS;
+-	} else
+-	if (XCASE && IUCLC && OLCUC
+-	 && (info == &mode_info[IDX_lcase] || info == &mode_info[IDX_LCASE])
+-	) {
++	}
++#endif
++#if XCASE && IUCLC && OLCUC
++	else if (info==&mode_info[IDX_lcase] || info==&mode_info[IDX_LCASE]) {
+ 		if (reversed) {
+ 			mode->c_lflag &= ~XCASE;
+ 			mode->c_iflag &= ~IUCLC;
+@@ -1118,7 +1123,9 @@ static void set_mode(const struct mode_info *info, int reversed,
+ 			mode->c_iflag |= IUCLC;
+ 			mode->c_oflag |= OLCUC;
+ 		}
+-	} else if (info == &mode_info[IDX_crt]) {
++	}
++#endif
++	else if (info == &mode_info[IDX_crt]) {
+ 		mode->c_lflag |= ECHOE | ECHOCTL | ECHOKE;
+ 	} else if (info == &mode_info[IDX_dec]) {
+ 		mode->c_cc[VINTR] = 3; /* ^C */
 diff --git a/debianutils/start_stop_daemon.c b/debianutils/start_stop_daemon.c
 index 6726fc7..ec12318 100644
 --- a/debianutils/start_stop_daemon.c
@@ -156,8 +381,20 @@ index 6726fc7..ec12318 100644
  		return !(opt & OPT_OKNODO);
  	}
  
+diff --git a/e2fsprogs/Config.in b/e2fsprogs/Config.in
+index 9a0088a..578ed63 100644
+--- a/e2fsprogs/Config.in
++++ b/e2fsprogs/Config.in
+@@ -44,6 +44,7 @@ config LSATTR
+ ### config TUNE2FS
+ ###	bool "tune2fs"
+ ###	default n
++###	depends on PLATFORM_LINUX
+ ###	help
+ ###	  tune2fs allows the system administrator to adjust various tunable
+ ###	  filesystem parameters on Linux ext2/ext3 filesystems.
 diff --git a/include/libbb.h b/include/libbb.h
-index 104a399..a4ad6ed 100644
+index 104a399..24ebe9e 100644
 --- a/include/libbb.h
 +++ b/include/libbb.h
 @@ -327,7 +327,7 @@ void xmove_fd(int, int) FAST_FUNC;
@@ -169,22 +406,301 @@ index 104a399..a4ad6ed 100644
  char *xmalloc_readlink(const char *path) FAST_FUNC;
  char *xmalloc_readlink_or_warn(const char *path) FAST_FUNC;
  char *xrealloc_getcwd_or_warn(char *cwd) FAST_FUNC;
+@@ -1496,7 +1496,27 @@ extern const char bb_default_login_shell[];
+ /* "sh" */
+ #define DEFAULT_SHELL_SHORT_NAME     (bb_default_login_shell+6)
+ 
+-#if ENABLE_FEATURE_DEVFS
++/* The following devices are the same on all systems.  */
++#define CURRENT_TTY "/dev/tty"
++#define DEV_CONSOLE "/dev/console"
++
++#if defined(__FreeBSD_kernel__)
++# define CURRENT_VC CURRENT_TTY
++# define VC_1 "/dev/ttyv0"
++# define VC_2 "/dev/ttyv1"
++# define VC_3 "/dev/ttyv2"
++# define VC_4 "/dev/ttyv3"
++# define VC_5 "/dev/ttyv4"
++# define VC_FORMAT "/dev/ttyv%d"
++#elif defined(__GNU__)
++# define CURRENT_VC CURRENT_TTY
++# define VC_1 "/dev/tty1"
++# define VC_2 "/dev/tty2"
++# define VC_3 "/dev/tty3"
++# define VC_4 "/dev/tty4"
++# define VC_5 "/dev/tty5"
++# define VC_FORMAT "/dev/tty%d"
++#elif ENABLE_FEATURE_DEVFS /* from now on, assume Linux naming */
+ # define CURRENT_VC "/dev/vc/0"
+ # define VC_1 "/dev/vc/1"
+ # define VC_2 "/dev/vc/2"
+@@ -1543,10 +1563,6 @@ extern const char bb_default_login_shell[];
+ # define FB_0 "/dev/fb0"
+ #endif
+ 
+-/* The following devices are the same on devfs and non-devfs systems.  */
+-#define CURRENT_TTY "/dev/tty"
+-#define DEV_CONSOLE "/dev/console"
+-
+ 
+ #ifndef RB_POWER_OFF
+ /* Stop system and switch power off if possible.  */
+diff --git a/init/Config.in b/init/Config.in
+index 3d99d47..0fe4343 100644
+--- a/init/Config.in
++++ b/init/Config.in
+@@ -87,6 +87,18 @@ config FEATURE_INITRD
+ 	  This does not apply to initramfs, which runs /init as PID 1 and
+ 	  requires no special support.
+ 
++config INIT_TERMINAL_TYPE
++	string "Initial terminal type"
++	default "linux"
++	depends on INIT
++	help
++	  This is the initial value set by init for the TERM environment
++	  variable. This variable is used by programs which make use of
++	  extended terminal capabilities.
++
++	  Note that on Linux, init attempts to detect serial terminal and
++	  sets TERM to "vt102" if one is found.
++
+ config HALT
+ 	bool "poweroff, halt, and reboot"
+ 	default n
+diff --git a/init/halt.c b/init/halt.c
+index c88c333..9876e7c 100644
+--- a/init/halt.c
++++ b/init/halt.c
+@@ -8,7 +8,7 @@
+  */
+ 
+ #include "libbb.h"
+-#include <sys/reboot.h>
++#include "reboot.h"
+ 
+ #if ENABLE_FEATURE_WTMP
+ #include <sys/utsname.h>
+@@ -36,14 +36,6 @@ static void write_wtmp(void)
+ #define write_wtmp() ((void)0)
+ #endif
+ 
+-#ifndef RB_HALT_SYSTEM
+-#define RB_HALT_SYSTEM RB_HALT
+-#endif
+-
+-#ifndef RB_POWER_OFF
+-#define RB_POWER_OFF RB_POWERDOWN
+-#endif
+-
+ int halt_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int halt_main(int argc UNUSED_PARAM, char **argv)
+ {
+diff --git a/init/init.c b/init/init.c
+index 35f64cf..4743cec 100644
+--- a/init/init.c
++++ b/init/init.c
+@@ -12,10 +12,18 @@
+ #include "libbb.h"
+ #include <syslog.h>
+ #include <paths.h>
+-#include <sys/reboot.h>
+ #include <sys/resource.h>
++#ifdef __linux__
+ #include <linux/vt.h>
++#endif
++#include "reboot.h" /* reboot() constants */
+ 
++/* Used only for sanitizing purposes in set_sane_term() below. On systems where
++ * the baud rate is stored in a separate field, we can safely disable them. */
++#ifndef CBAUD
++# define CBAUD 0
++# define CBAUDEX 0
++#endif
+ 
+ /* Was a CONFIG_xxx option. A lot of people were building
+  * not fully functional init by switching it on! */
+@@ -87,13 +95,6 @@ enum {
+ 	L_LOG = 0x1,
+ 	L_CONSOLE = 0x2,
+ 	MAYBE_CONSOLE = L_CONSOLE * !ENABLE_FEATURE_EXTRA_QUIET,
+-#ifndef RB_HALT_SYSTEM
+-	RB_HALT_SYSTEM = 0xcdef0123, /* FIXME: this overflows enum */
+-	RB_ENABLE_CAD = 0x89abcdef,
+-	RB_DISABLE_CAD = 0,
+-	RB_POWER_OFF = 0x4321fedc,
+-	RB_AUTOBOOT = 0x01234567,
+-#endif
+ };
+ 
+ /* Print a message to the specified device.
+@@ -164,7 +165,9 @@ static void message(int where, const char *fmt, ...)
+ 
+ static void console_init(void)
+ {
++#ifdef VT_OPENQRY
+ 	int vtno;
++#endif
+ 	char *s;
+ 
+ 	s = getenv("CONSOLE");
+@@ -188,6 +191,7 @@ static void console_init(void)
+ 	}
+ 
+ 	s = getenv("TERM");
++#ifdef VT_OPENQRY
+ 	if (ioctl(STDIN_FILENO, VT_OPENQRY, &vtno) != 0) {
+ 		/* Not a linux terminal, probably serial console.
+ 		 * Force the TERM setting to vt102
+@@ -196,8 +200,10 @@ static void console_init(void)
+ 			putenv((char*)"TERM=vt102");
+ 		if (!ENABLE_FEATURE_INIT_SYSLOG)
+ 			log_console = NULL;
+-	} else if (!s)
+-		putenv((char*)"TERM=linux");
++	} else
++#endif
++	if (!s)
++		putenv((char*)"TERM=" CONFIG_INIT_TERMINAL_TYPE);
+ }
+ 
+ /* Set terminal settings to reasonable defaults.
+@@ -218,8 +224,10 @@ static void set_sane_term(void)
+ 	tty.c_cc[VSTOP] = 19;	/* C-s */
+ 	tty.c_cc[VSUSP] = 26;	/* C-z */
+ 
++#ifdef __linux__
+ 	/* use line discipline 0 */
+ 	tty.c_line = 0;
++#endif
+ 
+ 	/* Make it be sane */
+ 	tty.c_cflag &= CBAUD | CBAUDEX | CSIZE | CSTOPB | PARENB | PARODD;
+@@ -722,10 +730,12 @@ static void restart_handler(int sig UNUSED_PARAM)
+ 		 */
+ 		run_shutdown_and_kill_processes();
+ 
++#ifdef RB_ENABLE_CAD
+ 		/* Allow Ctrl-Alt-Del to reboot the system.
+ 		 * This is how kernel sets it up for init, we follow suit.
+ 		 */
+ 		reboot(RB_ENABLE_CAD); /* misnomer */
++#endif
+ 
+ 		if (open_stdio_to_tty(a->terminal)) {
+ 			dbg_message(L_CONSOLE, "Trying to re-exec %s", a->command);
+@@ -834,9 +844,11 @@ int init_main(int argc UNUSED_PARAM, char **argv)
+ 		) {
+ 			bb_show_usage();
+ 		}
++#ifdef RB_DISABLE_CAD
+ 		/* Turn off rebooting via CTL-ALT-DEL - we get a
+ 		 * SIGINT on CAD so we can shut things down gracefully... */
+ 		reboot(RB_DISABLE_CAD); /* misnomer */
++#endif
+ 	}
+ 
+ 	/* Figure out where the default console should be */
+@@ -857,6 +869,8 @@ int init_main(int argc UNUSED_PARAM, char **argv)
+ 	/* Hello world */
+ 	message(MAYBE_CONSOLE | L_LOG, "init started: %s", bb_banner);
+ 
++/* struct sysinfo is linux-specific */
++#ifdef __linux__
+ 	/* Make sure there is enough memory to do something useful. */
+ 	if (ENABLE_SWAPONOFF) {
+ 		struct sysinfo info;
+@@ -872,6 +886,7 @@ int init_main(int argc UNUSED_PARAM, char **argv)
+ 			run_actions(SYSINIT);   /* wait and removing */
+ 		}
+ 	}
++#endif
+ 
+ 	/* Check if we are supposed to be in single user mode */
+ 	if (argv[1]
+diff --git a/init/reboot.h b/init/reboot.h
+new file mode 100644
+index 0000000..ff045fd
+--- /dev/null
++++ b/init/reboot.h
+@@ -0,0 +1,31 @@
++/*
++ * Definitions related to the reboot() system call,
++ * shared between init.c and halt.c.
++ */
++
++#include <sys/reboot.h>
++
++#ifndef RB_HALT_SYSTEM
++# if defined(__linux__)
++#  define RB_HALT_SYSTEM  0xcdef0123
++#  define RB_ENABLE_CAD   0x89abcdef
++#  define RB_DISABLE_CAD  0
++#  define RB_POWER_OFF    0x4321fedc
++#  define RB_AUTOBOOT     0x01234567
++# elif defined(RB_HALT)
++#  define RB_HALT_SYSTEM  RB_HALT
++# endif
++#endif
++
++/* Stop system and switch power off if possible.  */
++#ifndef RB_POWER_OFF
++# if defined(RB_POWERDOWN)
++#  define RB_POWER_OFF  RB_POWERDOWN
++# elif defined(__linux__)
++#  define RB_POWER_OFF  0x4321fedc
++# else
++#  warning "poweroff unsupported, using halt as fallback"
++#  define RB_POWER_OFF  RB_HALT_SYSTEM
++# endif
++#endif
++
+diff --git a/libbb/Config.in b/libbb/Config.in
+index bdb6dfa..6505da3 100644
+--- a/libbb/Config.in
++++ b/libbb/Config.in
+@@ -152,6 +152,7 @@ config FEATURE_COPYBUF_KB
+ config MONOTONIC_SYSCALL
+ 	bool "Use clock_gettime(CLOCK_MONOTONIC) syscall"
+ 	default y
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Use clock_gettime(CLOCK_MONOTONIC) syscall for measuring
+ 	  time intervals (time, ping, traceroute etc need this).
+diff --git a/libbb/make_directory.c b/libbb/make_directory.c
+index 391493c..9843270 100644
+--- a/libbb/make_directory.c
++++ b/libbb/make_directory.c
+@@ -61,7 +61,7 @@ int FAST_FUNC bb_make_directory(char *path, long mode, int flags)
+ 		if (mkdir(path, 0777) < 0) {
+ 			/* If we failed for any other reason than the directory
+ 			 * already exists, output a diagnostic and return -1. */
+-			if (errno != EEXIST
++			if ((errno != EEXIST && errno != EISDIR)
+ 			 || !(flags & FILEUTILS_RECUR)
+ 			 || ((stat(path, &st) < 0) || !S_ISDIR(st.st_mode))
+ 			) {
 diff --git a/libbb/safe_gethostname.c b/libbb/safe_gethostname.c
-index 7407fb7..e93254b 100644
+index 7407fb7..05e0954 100644
 --- a/libbb/safe_gethostname.c
 +++ b/libbb/safe_gethostname.c
-@@ -59,8 +59,12 @@ char* FAST_FUNC safe_gethostname(void)
+@@ -59,8 +59,16 @@ char* FAST_FUNC safe_gethostname(void)
   */
  char* FAST_FUNC safe_getdomainname(void)
  {
-+/* The field domainname of struct utsname is Linux specific. */
 +#if defined(__linux__)
++/* The field domainname of struct utsname is Linux specific. */
  	struct utsname uts;
 -
  	uname(&uts);
  	return xstrndup(!uts.domainname[0] ? "?" : uts.domainname, sizeof(uts.domainname));
 +#else
-+	return xstrdup("?");
++	/* We really don't care about people with domain names wider than most screens */
++	char buf[256];
++	int r = getdomainname(buf, sizeof(buf));
++	buf[sizeof(buf)-1] = '\0';
++	return xstrdup(r < 0 ? "?" : buf);
 +#endif
  }
 diff --git a/libbb/xconnect.c b/libbb/xconnect.c
@@ -215,6 +731,23 @@ index 85f93b6..dcf978b 100644
  
  len_and_sockaddr* FAST_FUNC get_sock_lsa(int fd)
  {
+diff --git a/libbb/xfuncs_printf.c b/libbb/xfuncs_printf.c
+index 5f56b36..2f07343 100644
+--- a/libbb/xfuncs_printf.c
++++ b/libbb/xfuncs_printf.c
+@@ -418,8 +418,12 @@ int FAST_FUNC xsocket(int domain, int type, int protocol)
+ 		/* Hijack vaguely related config option */
+ #if ENABLE_VERBOSE_RESOLUTION_ERRORS
+ 		const char *s = "INET";
++# ifdef AF_PACKET
+ 		if (domain == AF_PACKET) s = "PACKET";
++# endif
++# ifdef AF_NETLINK
+ 		if (domain == AF_NETLINK) s = "NETLINK";
++# endif
+ IF_FEATURE_IPV6(if (domain == AF_INET6) s = "INET6";)
+ 		bb_perror_msg_and_die("socket(AF_%s)", s);
+ #else
 diff --git a/libbb/xreadlink.c b/libbb/xreadlink.c
 index 8d232f1..faa0e16 100644
 --- a/libbb/xreadlink.c
@@ -240,6 +773,554 @@ index 8d232f1..faa0e16 100644
  #endif
  }
 -#endif
+diff --git a/loginutils/getty.c b/loginutils/getty.c
+index 838adf2..bb38507 100644
+--- a/loginutils/getty.c
++++ b/loginutils/getty.c
+@@ -282,10 +282,8 @@ static void termios_init(struct termios *tp, int speed, struct options *op)
+ 	 * reads will be done in raw mode anyway. Errors will be dealt with
+ 	 * later on.
+ 	 */
+-#ifdef __linux__
+ 	/* flush input and output queues, important for modems! */
+-	ioctl(0, TCFLSH, TCIOFLUSH); /* tcflush(0, TCIOFLUSH)? - same */
+-#endif
++	tcflush(0, TCIOFLUSH);
+ 	ispeed = ospeed = speed;
+ 	if (speed == B0) {
+ 		/* Speed was specified as "0" on command line.
+@@ -299,10 +297,13 @@ static void termios_init(struct termios *tp, int speed, struct options *op)
+ 	cfsetispeed(tp, ispeed);
+ 	cfsetospeed(tp, ospeed);
+ 
+-	tp->c_iflag = tp->c_lflag = tp->c_line = 0;
++	tp->c_iflag = tp->c_lflag = 0;
+ 	tp->c_oflag = OPOST | ONLCR;
+ 	tp->c_cc[VMIN] = 1;
+ 	tp->c_cc[VTIME] = 0;
++#ifdef __linux__
++	tp->c_line = 0;
++#endif
+ 
+ 	/* Optionally enable hardware flow control */
+ #ifdef CRTSCTS
+@@ -360,10 +361,8 @@ static void auto_baud(char *buf, unsigned size_buf, struct termios *tp)
+ 		for (bp = buf; bp < buf + nread; bp++) {
+ 			if (isdigit(*bp)) {
+ 				speed = bcode(bp);
+-				if (speed > 0) {
+-					tp->c_cflag &= ~CBAUD;
+-					tp->c_cflag |= speed;
+-				}
++				if (speed > 0)
++					cfsetspeed(tp, speed);
+ 				break;
+ 			}
+ 		}
+@@ -417,7 +416,7 @@ static char *get_logname(char *logname, unsigned size_logname,
+ 
+ 	/* Flush pending input (esp. after parsing or switching the baud rate). */
+ 	sleep(1);
+-	ioctl(0, TCFLSH, TCIFLUSH); /* tcflush(0, TCIOFLUSH)? - same */
++	tcflush(0, TCIOFLUSH);
+ 
+ 	/* Prompt for and read a login name. */
+ 	logname[0] = '\0';
+@@ -525,7 +524,9 @@ static void termios_final(struct options *op, struct termios *tp, struct chardat
+ 	tp->c_cc[VQUIT] = DEF_QUIT;     /* default quit */
+ 	tp->c_cc[VEOF] = DEF_EOF;       /* default EOF character */
+ 	tp->c_cc[VEOL] = DEF_EOL;
++#ifdef VSWTC
+ 	tp->c_cc[VSWTC] = DEF_SWITCH;   /* default switch character */
++#endif
+ 
+ 	/* Account for special characters seen in input. */
+ 	if (cp->eol == CR) {
+@@ -571,8 +572,8 @@ static void termios_final(struct options *op, struct termios *tp, struct chardat
+ #endif
+ 
+ 	/* Finally, make the new settings effective */
+-	/* It's tcsetattr_stdin_TCSANOW() + error check */
+-	ioctl_or_perror_and_die(0, TCSETS, tp, "%s: TCSETS", op->tty);
++	if(tcsetattr_stdin_TCSANOW(tp) < 0)
++		bb_perror_msg_and_die("%s: tcsetattr", op->tty);
+ }
+ 
+ #if ENABLE_FEATURE_UTMP
+@@ -703,8 +704,8 @@ int getty_main(int argc UNUSED_PARAM, char **argv)
+ 	 * by patching the SunOS kernel variable "zsadtrlow" to a larger value;
+ 	 * 5 seconds seems to be a good value.
+ 	 */
+-	/* tcgetattr() + error check */
+-	ioctl_or_perror_and_die(0, TCGETS, &termios, "%s: TCGETS", options.tty);
++	if(tcgetattr(0, &termios) < 0)
++		bb_perror_msg_and_die("%s: tcgetattr", options.tty);
+ 
+ #ifdef __linux__
+ // FIXME: do we need this? Otherwise "-" case seems to be broken...
+diff --git a/loginutils/login.c b/loginutils/login.c
+index 31b25a4..2fd4a65 100644
+--- a/loginutils/login.c
++++ b/loginutils/login.c
+@@ -346,7 +346,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 	while (1) {
+ 		/* flush away any type-ahead (as getty does) */
+-		ioctl(0, TCFLSH, TCIFLUSH);
++		tcflush(0, TCIFLUSH);
+ 
+ 		if (!username[0])
+ 			get_username_or_die(username, sizeof(username));
+diff --git a/loginutils/vlock.c b/loginutils/vlock.c
+index 85f489c..59aeb54 100644
+--- a/loginutils/vlock.c
++++ b/loginutils/vlock.c
+@@ -15,9 +15,11 @@
+ /* Fixed by Erik Andersen to do passwords the tinylogin way...
+  * It now works with md5, sha1, etc passwords. */
+ 
+-#include <sys/vt.h>
+ #include "libbb.h"
+ 
++#ifdef __linux__
++#include <sys/vt.h>
++
+ static void release_vt(int signo UNUSED_PARAM)
+ {
+ 	/* If -a, param is 0, which means:
+@@ -30,14 +32,17 @@ static void acquire_vt(int signo UNUSED_PARAM)
+ 	/* ACK to kernel that switch to console is successful */
+ 	ioctl(STDIN_FILENO, VT_RELDISP, VT_ACKACQ);
+ }
++#endif
+ 
+ int vlock_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ {
++#ifdef __linux__
+ 	struct vt_mode vtm;
++	struct vt_mode ovtm;
++#endif
+ 	struct termios term;
+ 	struct termios oterm;
+-	struct vt_mode ovtm;
+ 	struct passwd *pw;
+ 
+ 	pw = xgetpwuid(getuid());
+@@ -55,6 +60,7 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 		+ (1 << SIGINT )
+ 		, SIG_IGN);
+ 
++#ifdef __linux__
+ 	/* We will use SIGUSRx for console switch control: */
+ 	/* 1: set handlers */
+ 	signal_SA_RESTART_empty_mask(SIGUSR1, release_vt);
+@@ -62,12 +68,14 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 	/* 2: unmask them */
+ 	sig_unblock(SIGUSR1);
+ 	sig_unblock(SIGUSR2);
++#endif
+ 
+ 	/* Revert stdin/out to our controlling tty
+ 	 * (or die if we have none) */
+ 	xmove_fd(xopen(CURRENT_TTY, O_RDWR), STDIN_FILENO);
+ 	xdup2(STDIN_FILENO, STDOUT_FILENO);
+ 
++#ifdef __linux__
+ 	xioctl(STDIN_FILENO, VT_GETMODE, &vtm);
+ 	ovtm = vtm;
+ 	/* "console switches are controlled by us, not kernel!" */
+@@ -75,6 +83,7 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 	vtm.relsig = SIGUSR1;
+ 	vtm.acqsig = SIGUSR2;
+ 	ioctl(STDIN_FILENO, VT_SETMODE, &vtm);
++#endif
+ 
+ 	tcgetattr(STDIN_FILENO, &oterm);
+ 	term = oterm;
+@@ -95,7 +104,9 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
+ 		puts("Password incorrect");
+ 	} while (1);
+ 
++#ifdef __linux__
+ 	ioctl(STDIN_FILENO, VT_SETMODE, &ovtm);
++#endif
+ 	tcsetattr_stdin_TCSANOW(&oterm);
+ 	fflush_stdout_and_exit(EXIT_SUCCESS);
+ }
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 9a81ecc..f5eb9fb 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -8,6 +8,7 @@ menu "Miscellaneous Utilities"
+ config ADJTIMEX
+ 	bool "adjtimex"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Adjtimex reads and optionally sets adjustment parameters for
+ 	  the Linux clock adjustment algorithm.
+@@ -22,6 +23,7 @@ config BBCONFIG
+ config BEEP
+ 	bool "beep"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The beep applets beeps in a given freq/Hz.
+ 
+@@ -178,6 +180,7 @@ config FEATURE_DC_LIBM
+ config DEVFSD
+ 	bool "devfsd (obsolete)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  This is deprecated and should NOT be used anymore.
+@@ -221,6 +224,7 @@ config DEVFSD_VERBOSE
+ config FEATURE_DEVFS
+ 	bool "Use devfs names for all devices (obsolete)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This is obsolete and should NOT be used anymore.
+ 	  Use linux >= 2.6 (optionally with hotplug) and mdev instead!
+@@ -240,6 +244,7 @@ config DEVMEM
+ config EJECT
+ 	bool "eject"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Used to eject cdroms. (defaults to /dev/cdrom)
+ 
+@@ -254,6 +259,7 @@ config FEATURE_EJECT_SCSI
+ config FBSPLASH
+ 	bool "fbsplash"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Shows splash image and progress bar on framebuffer device.
+ 	  Can be used during boot phase of an embedded device. ~2kb.
+@@ -275,6 +281,7 @@ config FBSPLASH
+ config FLASH_LOCK
+ 	bool "flash_lock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The flash_lock binary from mtd-utils as of git head 5ec0c10d0. This
+ 	  utility locks part or all of the flash device.
+@@ -282,6 +289,7 @@ config FLASH_LOCK
+ config FLASH_UNLOCK
+ 	bool "flash_unlock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The flash_unlock binary from mtd-utils as of git head 5ec0c10d0. This
+ 	  utility unlocks part or all of the flash device.
+@@ -289,6 +297,7 @@ config FLASH_UNLOCK
+ config FLASH_ERASEALL
+ 	bool "flash_eraseall"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The flash_eraseall binary from mtd-utils as of git head c4c6a59eb.
+ 	  This utility is used to erase the whole MTD device.
+@@ -296,6 +305,7 @@ config FLASH_ERASEALL
+ config IONICE
+ 	bool "ionice"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Set/set program io scheduling class and priority
+ 	  Requires kernel >= 2.6.13
+@@ -303,6 +313,7 @@ config IONICE
+ config INOTIFYD
+ 	bool "inotifyd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Simple inotify daemon. Reports filesystem changes. Requires
+ 	  kernel >= 2.6.13
+@@ -401,6 +412,7 @@ config FEATURE_LESS_LINENUMS
+ config HDPARM
+ 	bool "hdparm"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Get/Set hard drive parameters. Primarily intended for ATA
+ 	  drives. Adds about 13k (or around 30k if you enable the
+@@ -517,6 +529,7 @@ config MT
+ config RAIDAUTORUN
+ 	bool "raidautorun"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  raidautorun tells the kernel md driver to
+ 	  search and start RAID arrays.
+@@ -524,7 +537,7 @@ config RAIDAUTORUN
+ config READAHEAD
+ 	bool "readahead"
+ 	default n
+-	depends on LFS
++	depends on LFS && PLATFORM_LINUX
+ 	help
+ 	  Preload the files listed on the command line into RAM cache so that
+ 	  subsequent reads on these files will not block on disk I/O.
+@@ -569,6 +582,7 @@ config STRINGS
+ config TASKSET
+ 	bool "taskset"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Retrieve or set a processes's CPU affinity.
+ 	  This requires sched_{g,s}etaffinity support in your libc.
+@@ -615,6 +629,7 @@ config VOLNAME
+ config WATCHDOG
+ 	bool "watchdog"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The watchdog utility is used with hardware or software watchdog
+ 	  device drivers. It opens the specified watchdog device special file
+diff --git a/modutils/Config.in b/modutils/Config.in
+index d2a2e04..963e28d 100644
+--- a/modutils/Config.in
++++ b/modutils/Config.in
+@@ -4,6 +4,7 @@
+ #
+ 
+ menu "Linux Module Utilities"
++depends on PLATFORM_LINUX
+ 
+ config MODPROBE_SMALL
+ 	bool "Simplified modutils"
+diff --git a/networking/Config.in b/networking/Config.in
+index 83522ff..3fe64ac 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -49,18 +49,21 @@ config VERBOSE_RESOLUTION_ERRORS
+ config ARP
+ 	bool "arp"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Manipulate the system ARP cache.
+ 
+ config ARPING
+ 	bool "arping"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Ping hosts by ARP packets.
+ 
+ config BRCTL
+ 	bool "brctl"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Manage ethernet bridges.
+ 	  Supports addbr/delbr and addif/delif.
+@@ -93,6 +96,7 @@ config DNSD
+ config ETHER_WAKE
+ 	bool "ether-wake"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Send a magic packet to wake up sleeping machines.
+ 
+@@ -256,6 +260,7 @@ config FEATURE_HTTPD_PROXY
+ config IFCONFIG
+ 	bool "ifconfig"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Ifconfig is used to configure the kernel-resident network interfaces.
+ 
+@@ -303,6 +308,7 @@ config FEATURE_IFCONFIG_BROADCAST_PLUS
+ config IFENSLAVE
+ 	bool "ifenslave"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Userspace application to bind several interfaces
+ 	  to a logical interface (use with kernel bonding driver).
+@@ -310,6 +316,7 @@ config IFENSLAVE
+ config IFPLUGD
+ 	bool "ifplugd"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Network interface plug detection daemon.
+ 
+@@ -351,7 +358,7 @@ config FEATURE_IFUPDOWN_IP
+ config FEATURE_IFUPDOWN_IP_BUILTIN
+ 	bool "Use busybox ip applet"
+ 	default y
+-	depends on FEATURE_IFUPDOWN_IP
++	depends on FEATURE_IFUPDOWN_IP && PLATFORM_LINUX
+ 	select IP
+ 	select FEATURE_IP_ADDRESS
+ 	select FEATURE_IP_LINK
+@@ -470,6 +477,7 @@ config FEATURE_INETD_RPC
+ config IP
+ 	bool "ip"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The "ip" applet is a TCP/IP interface configuration and routing
+ 	  utility. You generally don't need "ip" to use busybox with
+@@ -585,6 +593,7 @@ config FEATURE_IPCALC_LONG_OPTIONS
+ config NAMEIF
+ 	bool "nameif"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  nameif is used to rename network interface by its MAC address.
+@@ -636,6 +645,7 @@ config NC_EXTRA
+ config NETSTAT
+ 	bool "netstat"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  netstat prints information about the Linux networking subsystem.
+ 
+@@ -664,6 +674,7 @@ config NSLOOKUP
+ config PING
+ 	bool "ping"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  ping uses the ICMP protocol's mandatory ECHO_REQUEST datagram to
+ 	  elicit an ICMP ECHO_RESPONSE from a host or gateway.
+@@ -692,12 +703,14 @@ config PSCAN
+ config ROUTE
+ 	bool "route"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Route displays or manipulates the kernel's IP routing tables.
+ 
+ config SLATTACH
+ 	bool "slattach"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  slattach is a small utility to attach network interfaces to serial
+ 	  lines.
+@@ -843,6 +856,7 @@ config TFTP_DEBUG
+ config TRACEROUTE
+ 	bool "traceroute"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Utility to trace the route of IP packets.
+ 
+@@ -883,6 +897,7 @@ config IFUPDOWN_UDHCPC_CMD_OPTIONS
+ config VCONFIG
+ 	bool "vconfig"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Creates, removes, and configures VLAN interfaces
+ 
+@@ -917,6 +932,7 @@ config FEATURE_WGET_LONG_OPTIONS
+ config ZCIP
+ 	bool "zcip"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  ZCIP provides ZeroConf IPv4 address selection, according to RFC 3927.
+@@ -936,6 +952,7 @@ config TCPSVD
+ config TUNCTL
+ 	bool "tunctl"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  tunctl creates or deletes tun devices.
+ 
+diff --git a/networking/tcpudp.c b/networking/tcpudp.c
+index 98a2aa8..70bf5dd 100644
+--- a/networking/tcpudp.c
++++ b/networking/tcpudp.c
+@@ -30,9 +30,12 @@
+  */
+ 
+ #include "libbb.h"
++
+ /* Wants <limits.h> etc, thus included after libbb.h: */
++#ifdef __linux__
+ #include <linux/types.h> /* for __be32 etc */
+ #include <linux/netfilter_ipv4.h>
++#endif
+ 
+ // TODO: move into this file:
+ #include "tcpudp_perhost.h"
+@@ -465,6 +468,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
+ 			/* setup ucspi env */
+ 			const char *proto = tcp ? "TCP" : "UDP";
+ 
++#ifdef SO_ORIGINAL_DST
+ 			/* Extract "original" destination addr:port
+ 			 * from Linux firewall. Useful when you redirect
+ 			 * an outbond connection to local handler, and it needs
+@@ -474,6 +478,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
+ 				xsetenv_plain("TCPORIGDSTADDR", addr);
+ 				free(addr);
+ 			}
++#endif
+ 			xsetenv_plain("PROTO", proto);
+ 			xsetenv_proto(proto, "LOCALADDR", local_addr);
+ 			xsetenv_proto(proto, "REMOTEADDR", remote_addr);
+diff --git a/networking/udhcp/Config.in b/networking/udhcp/Config.in
+index 5f76dd8..af6a925 100644
+--- a/networking/udhcp/Config.in
++++ b/networking/udhcp/Config.in
+@@ -6,6 +6,7 @@
+ config APP_UDHCPD
+ 	bool "udhcp server (udhcpd)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  udhcpd is a DHCP server geared primarily toward embedded systems,
+ 	  while striving to be fully functional and RFC compliant.
+@@ -49,6 +50,7 @@ config DHCPD_LEASES_FILE
+ config APP_UDHCPC
+ 	bool "udhcp client (udhcpc)"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  udhcpc is a DHCP client geared primarily toward embedded systems,
+ 	  while striving to be fully functional and RFC compliant.
+diff --git a/procps/Config.in b/procps/Config.in
+index 9146ff6..a024c2d 100644
+--- a/procps/Config.in
++++ b/procps/Config.in
+@@ -8,6 +8,7 @@ menu "Process Utilities"
+ config FREE
+ 	bool "free"
+ 	default n
++	depends on PLATFORM_LINUX #sysinfo()
+ 	help
+ 	  free displays the total amount of free and used physical and swap
+ 	  memory in the system, as well as the buffers used by the kernel.
+@@ -102,7 +103,7 @@ config FEATURE_PS_WIDE
+ config FEATURE_PS_TIME
+ 	bool "Enable time and elapsed time output"
+ 	default n
+-	depends on PS && DESKTOP
++	depends on PS && DESKTOP && PLATFORM_LINUX #sysinfo()
+ 	help
+ 	  Support -o time and -o etime output specifiers.
+ 
+@@ -191,6 +192,7 @@ config FEATURE_TOPMEM
+ config UPTIME
+ 	bool "uptime"
+ 	default n
++	depends on PLATFORM_LINUX #sysinfo()
+ 	help
+ 	  uptime gives a one line display of the current time, how long
+ 	  the system has been running, how many users are currently logged
 diff --git a/scripts/basic/docproc.c b/scripts/basic/docproc.c
 index e178d72..12341e2 100644
 --- a/scripts/basic/docproc.c
@@ -328,194 +1409,6 @@ index 9365a12..4f83fbf 100644
  		sprintf(fullname, "%s/%s", env, name);
  		if (!stat(fullname, &buf))
  			return fullname;
-diff --git a/scripts/kconfig/mconf.c b/scripts/kconfig/mconf.c
-index 647ec09..0c548bf 100644
---- a/scripts/kconfig/mconf.c
-+++ b/scripts/kconfig/mconf.c
-@@ -258,7 +258,7 @@ search_help[] = N_(
- 
- static char buf[4096], *bufptr = buf;
- static char input_buf[4096];
--static char filename[PATH_MAX+1] = ".config";
-+static const char filename[] = ".config";
- static char *args[1024], **argptr = args;
- static int indent;
- static struct termios ios_org;
-diff --git a/scripts/kconfig/zconf.l b/scripts/kconfig/zconf.l
-index d839577..6a58b80 100644
---- a/scripts/kconfig/zconf.l
-+++ b/scripts/kconfig/zconf.l
-@@ -265,13 +265,14 @@ static void zconf_endhelp(void)
-  */
- FILE *zconf_fopen(const char *name)
- {
--	char *env, fullname[PATH_MAX+1];
-+	char *env;
- 	FILE *f;
- 
- 	f = fopen(name, "r");
- 	if (!f && name[0] != '/') {
- 		env = getenv(SRCTREE);
- 		if (env) {
-+			char *fullname = alloca(strlen(env) + strlen(name) + 2);
- 			sprintf(fullname, "%s/%s", env, name);
- 			f = fopen(fullname, "r");
- 		}
-diff --git a/scripts/kconfig/zconf.y b/scripts/kconfig/zconf.y
-index 0a7a796..2007a4e 100644
---- a/scripts/kconfig/zconf.y
-+++ b/scripts/kconfig/zconf.y
-@@ -14,8 +14,6 @@
- #define LKC_DIRECT_LINK
- #include "lkc.h"
- 
--#include "zconf.hash.c"
--
- #define printd(mask, fmt...) if (cdebug & (mask)) printf(fmt)
- 
- #define PRINTD		0x0001
-@@ -99,6 +97,10 @@ static struct menu *current_menu, *current_entry;
- 		menu_end_menu();
- } if_entry menu_entry choice_entry
- 
-+%{
-+#include "zconf.hash.c"
-+%}
-+
- %%
- input: stmt_list;
- 
-diff --git a/util-linux/umount.c b/util-linux/umount.c
-index a4b2bd0..a19f86c 100644
---- a/util-linux/umount.c
-+++ b/util-linux/umount.c
-@@ -39,6 +39,10 @@
- # define MS_RELATIME    (1 << 21)
- #endif
- #include "libbb.h"
-+#ifndef PATH_MAX
-+# define PATH_MAX (4*1024)
-+#endif
-+
- 
- #if defined(__dietlibc__)
- /* 16.12.2006, Sampo Kellomaki (sampo@iki.fi)
-@@ -69,7 +73,7 @@ int umount_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
- int umount_main(int argc UNUSED_PARAM, char **argv)
- {
- 	int doForce;
--	char *const path = xmalloc(PATH_MAX + 2); /* to save stack */
-+	char *const buf = xmalloc(PATH_MAX * 2 + 128); /* to save stack */
- 	struct mntent me;
- 	FILE *fp;
- 	char *fstype = NULL;
-@@ -100,7 +104,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
- 		if (opt & OPT_ALL)
- 			bb_error_msg_and_die("can't open '%s'", bb_path_mtab_file);
- 	} else {
--		while (getmntent_r(fp, &me, path, PATH_MAX)) {
-+		while (getmntent_r(fp, &me, buf, PATH_MAX * 2 + 128)) {
- 			/* Match fstype if passed */
- 			if (!match_fstype(&me, fstype))
- 				continue;
-@@ -124,10 +128,11 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
- 	for (;;) {
- 		int curstat;
- 		char *zapit = *argv;
-+		char *path;
- 
- 		// Do we already know what to umount this time through the loop?
- 		if (m)
--			safe_strncpy(path, m->dir, PATH_MAX);
-+			path = xstrdup(m->dir);
- 		// For umount -a, end of mtab means time to exit.
- 		else if (opt & OPT_ALL)
- 			break;
-@@ -136,10 +141,12 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
- 			if (!zapit)
- 				break;
- 			argv++;
--			realpath(zapit, path);
--			for (m = mtl; m; m = m->next)
--				if (!strcmp(path, m->dir) || !strcmp(path, m->device))
--					break;
-+			path = xmalloc_realpath(zapit);
-+			if (path) {
-+				for (m = mtl; m; m = m->next)
-+					if (strcmp(path, m->dir) == 0 || strcmp(path, m->device) == 0)
-+						break;
-+			}
- 		}
- 		// If we couldn't find this sucker in /etc/mtab, punt by passing our
- 		// command line argument straight to the umount syscall.  Otherwise,
-@@ -181,9 +188,13 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
- 		// Find next matching mtab entry for -a or umount /dev
- 		// Note this means that "umount /dev/blah" will unmount all instances
- 		// of /dev/blah, not just the most recent.
--		if (m) while ((m = m->next) != NULL)
--			if ((opt & OPT_ALL) || !strcmp(path, m->device))
--				break;
-+		if (m) {
-+			while ((m = m->next) != NULL)
-+				// NB: if m is non-NULL, path is non-NULL as well
-+				if ((opt & OPT_ALL) || strcmp(path, m->device) == 0)
-+					break;
-+		}
-+		free(path);
- 	}
- 
- 	// Free mtab list if necessary
-@@ -195,7 +206,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
- 			free(mtl);
- 			mtl = m;
- 		}
--		free(path);
-+		free(buf);
- 	}
- 
- 	return status;
-
-commit ef8c9ceabfa78a99ae504dbcee61741b58fc07f6
-Author: Denys Vlasenko <vda.linux@googlemail.com>
-Date:   Mon Mar 29 11:20:00 2010 +0200
-
-    provide safe_gethostname() for non-linux systems
-    
-    Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
-
-diff --git a/libbb/safe_gethostname.c b/libbb/safe_gethostname.c
-index e93254b..05e0954 100644
---- a/libbb/safe_gethostname.c
-+++ b/libbb/safe_gethostname.c
-@@ -59,12 +59,16 @@ char* FAST_FUNC safe_gethostname(void)
-  */
- char* FAST_FUNC safe_getdomainname(void)
- {
--/* The field domainname of struct utsname is Linux specific. */
- #if defined(__linux__)
-+/* The field domainname of struct utsname is Linux specific. */
- 	struct utsname uts;
- 	uname(&uts);
- 	return xstrndup(!uts.domainname[0] ? "?" : uts.domainname, sizeof(uts.domainname));
- #else
--	return xstrdup("?");
-+	/* We really don't care about people with domain names wider than most screens */
-+	char buf[256];
-+	int r = getdomainname(buf, sizeof(buf));
-+	buf[sizeof(buf)-1] = '\0';
-+	return xstrdup(r < 0 ? "?" : buf);
- #endif
- }
-
-commit 924f307e814264de855e2c69b27c3800c4f95e07
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:36:40 2010 +0200
-
-    update scripts/kconfig/*_shipped
-    
-    These files are generated using bison and lex, but I forgot to include
-    the new versions in my Hurd kconfig patch.
-
 diff --git a/scripts/kconfig/lex.zconf.c_shipped b/scripts/kconfig/lex.zconf.c_shipped
 index 5fc323d..9fc86bf 100644
 --- a/scripts/kconfig/lex.zconf.c_shipped
@@ -1238,6 +2131,19 @@ index 5fc323d..9fc86bf 100644
  			sprintf(fullname, "%s/%s", env, name);
  			f = fopen(fullname, "r");
  		}
+diff --git a/scripts/kconfig/mconf.c b/scripts/kconfig/mconf.c
+index 647ec09..0c548bf 100644
+--- a/scripts/kconfig/mconf.c
++++ b/scripts/kconfig/mconf.c
+@@ -258,7 +258,7 @@ search_help[] = N_(
+ 
+ static char buf[4096], *bufptr = buf;
+ static char input_buf[4096];
+-static char filename[PATH_MAX+1] = ".config";
++static const char filename[] = ".config";
+ static char *args[1024], **argptr = args;
+ static int indent;
+ static struct termios ios_org;
 diff --git a/scripts/kconfig/zconf.hash.c_shipped b/scripts/kconfig/zconf.hash.c_shipped
 index 345f0fc..e5da943 100644
 --- a/scripts/kconfig/zconf.hash.c_shipped
@@ -1258,6 +2164,26 @@ index 345f0fc..e5da943 100644
  #endif
  struct kconf_id *
  kconf_id_lookup (register const char *str, register unsigned int len)
+diff --git a/scripts/kconfig/zconf.l b/scripts/kconfig/zconf.l
+index d839577..6a58b80 100644
+--- a/scripts/kconfig/zconf.l
++++ b/scripts/kconfig/zconf.l
+@@ -265,13 +265,14 @@ static void zconf_endhelp(void)
+  */
+ FILE *zconf_fopen(const char *name)
+ {
+-	char *env, fullname[PATH_MAX+1];
++	char *env;
+ 	FILE *f;
+ 
+ 	f = fopen(name, "r");
+ 	if (!f && name[0] != '/') {
+ 		env = getenv(SRCTREE);
+ 		if (env) {
++			char *fullname = alloca(strlen(env) + strlen(name) + 2);
+ 			sprintf(fullname, "%s/%s", env, name);
+ 			f = fopen(fullname, "r");
+ 		}
 diff --git a/scripts/kconfig/zconf.tab.c_shipped b/scripts/kconfig/zconf.tab.c_shipped
 index b62724d..818260f 100644
 --- a/scripts/kconfig/zconf.tab.c_shipped
@@ -3476,1348 +4402,60 @@ index b62724d..818260f 100644
  #include "menu.c"
  
 -
-
-commit 91c940c71d504db70417c43b4c9ed80f5e37f41b
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:32:19 2010 +0200
-
-    readlink: use xmalloc_realpath()
-    
-    Using realpath() directly with a non-NULL output buffer is unsafe because its
-    behavior is unspecified on systems which don't have PATH_MAX (ie. Hurd)
-    
-    I beleive this also fixes a small bug whereby 'buf' would not be freed
-    on 'readlink -v' with ENABLE_FEATURE_CLEANUP.
-
-diff --git a/coreutils/readlink.c b/coreutils/readlink.c
-index 20df38b..2ed5e2c 100644
---- a/coreutils/readlink.c
-+++ b/coreutils/readlink.c
-@@ -36,7 +36,6 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
- {
- 	char *buf;
- 	char *fname;
--	char pathbuf[PATH_MAX];
+diff --git a/scripts/kconfig/zconf.y b/scripts/kconfig/zconf.y
+index 0a7a796..2007a4e 100644
+--- a/scripts/kconfig/zconf.y
++++ b/scripts/kconfig/zconf.y
+@@ -14,8 +14,6 @@
+ #define LKC_DIRECT_LINK
+ #include "lkc.h"
  
- 	IF_FEATURE_READLINK_FOLLOW(
- 		unsigned opt;
-@@ -56,7 +55,7 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
- 		logmode = LOGMODE_NONE;
+-#include "zconf.hash.c"
+-
+ #define printd(mask, fmt...) if (cdebug & (mask)) printf(fmt)
  
- 	if (opt & 1) { /* -f */
--		buf = realpath(fname, pathbuf);
-+		buf = xmalloc_realpath(fname);
- 	} else {
- 		buf = xmalloc_readlink_or_warn(fname);
+ #define PRINTD		0x0001
+@@ -99,6 +97,10 @@ static struct menu *current_menu, *current_entry;
+ 		menu_end_menu();
+ } if_entry menu_entry choice_entry
+ 
++%{
++#include "zconf.hash.c"
++%}
++
+ %%
+ input: stmt_list;
+ 
+diff --git a/shell/cttyhack.c b/shell/cttyhack.c
+index 572a3af..5d8b9b2 100644
+--- a/shell/cttyhack.c
++++ b/shell/cttyhack.c
+@@ -53,13 +53,19 @@ int cttyhack_main(int argc UNUSED_PARAM, char **argv)
  	}
-@@ -65,7 +64,7 @@ int readlink_main(int argc UNUSED_PARAM, char **argv)
- 		return EXIT_FAILURE;
- 	printf((opt & 2) ? "%s" : "%s\n", buf);
  
--	if (ENABLE_FEATURE_CLEAN_UP && !opt)
-+	if (ENABLE_FEATURE_CLEAN_UP)
- 		free(buf);
- 
- 	fflush_stdout_and_exit(EXIT_SUCCESS);
-
-commit 21719687dc904bf39c31d302959295016bfa6c04
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:37:24 2010 +0200
-
-    mark Linux-specific configuration options
-    
-    PLATFORM_LINUX is used as a dependency for applets or features
-    which require Linux-specific interfaces.
-
-diff --git a/Config.in b/Config.in
-index 99f814e..054256f 100644
---- a/Config.in
-+++ b/Config.in
-@@ -30,6 +30,17 @@ config EXTRA_COMPAT
- 	  some GNU extensions in libc. You probably only need this option
- 	  if you plan to run busybox on desktop.
- 
-+config PLATFORM_LINUX
-+	bool "Enable Linux-specific applets and features"
-+	default y
-+	help
-+	  For the most part, busybox requires only POSIX compatibility
-+	  from the target system, but some applets and features use
-+	  Linux-specific interfaces.
+ 	strcpy(console, "/dev/tty");
 +
-+	  Answering 'N' here will disable such applets and hide the
-+	  corresponding configuration options.
-+
- choice
- 	prompt "Buffer allocation policy"
- 	default FEATURE_BUFFERS_USE_MALLOC
-@@ -222,6 +233,7 @@ config FEATURE_SUID_CONFIG_QUIET
- config SELINUX
- 	bool "Support NSA Security Enhanced Linux"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Enable support for SELinux in applets ls, ps, and id. Also provide
- 	  the option of compiling in SELinux applets.
-diff --git a/console-tools/Config.in b/console-tools/Config.in
-index cd0a931..ba72b21 100644
---- a/console-tools/Config.in
-+++ b/console-tools/Config.in
-@@ -8,6 +8,7 @@ menu "Console Utilities"
- config CHVT
- 	bool "chvt"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program is used to change to another terminal.
- 	  Example: chvt 4 (change to terminal /dev/tty4)
-@@ -21,12 +22,14 @@ config CLEAR
- config DEALLOCVT
- 	bool "deallocvt"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program deallocates unused virtual consoles.
++#ifdef TIOCGSERIAL
+ 	if (ioctl(0, TIOCGSERIAL, &u.sr) == 0) {
+ 		/* this is a serial console */
+ 		sprintf(console + 8, "S%d", u.sr.line);
+-	} else if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
++	}
++#endif
++#ifdef __linux__
++	if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
+ 		/* this is linux virtual tty */
+ 		sprintf(console + 8, "S%d" + 1, u.vt.v_active);
+ 	}
++#endif
  
- config DUMPKMAP
- 	bool "dumpkmap"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program dumps the kernel's keyboard translation table to
- 	  stdout, in binary format. You can then use loadkmap to load it.
-@@ -34,18 +37,21 @@ config DUMPKMAP
- config KBD_MODE
- 	bool "kbd_mode"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program reports and sets keyboard mode.
- 
- config LOADFONT
- 	bool "loadfont"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program loads a console font from standard input.
- 
- config LOADKMAP
- 	bool "loadkmap"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program loads a keyboard translation table from
- 	  standard input.
-@@ -53,6 +59,7 @@ config LOADKMAP
- config OPENVT
- 	bool "openvt"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program is used to start a command on an unused
- 	  virtual terminal.
-@@ -84,6 +91,7 @@ config FEATURE_RESIZE_PRINT
- config SETCONSOLE
- 	bool "setconsole"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program redirects the system console to another device,
- 	  like the current tty while logged in via telnet.
-@@ -98,6 +106,7 @@ config FEATURE_SETCONSOLE_LONG_OPTIONS
- config SETFONT
- 	bool "setfont"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Allows to load console screen map. Useful for i18n.
- 
-@@ -119,6 +128,7 @@ config DEFAULT_SETFONT_DIR
- config SETKEYCODES
- 	bool "setkeycodes"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program loads entries into the kernel's scancode-to-keycode
- 	  map, allowing unusual keyboards to generate usable keycodes.
-@@ -126,12 +136,14 @@ config SETKEYCODES
- config SETLOGCONS
- 	bool "setlogcons"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This program redirects the output console of kernel messages.
- 
- config SHOWKEY
- 	bool "showkey"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Shows keys pressed.
- 
-diff --git a/coreutils/Config.in b/coreutils/Config.in
-index cacfb96..6648111 100644
---- a/coreutils/Config.in
-+++ b/coreutils/Config.in
-@@ -606,6 +606,7 @@ config FEATURE_STAT_FORMAT
- config STTY
- 	bool "stty"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  stty is used to change and print terminal line settings.
- 
-diff --git a/e2fsprogs/Config.in b/e2fsprogs/Config.in
-index 9a0088a..578ed63 100644
---- a/e2fsprogs/Config.in
-+++ b/e2fsprogs/Config.in
-@@ -44,6 +44,7 @@ config LSATTR
- ### config TUNE2FS
- ###	bool "tune2fs"
- ###	default n
-+###	depends on PLATFORM_LINUX
- ###	help
- ###	  tune2fs allows the system administrator to adjust various tunable
- ###	  filesystem parameters on Linux ext2/ext3 filesystems.
-diff --git a/init/Config.in b/init/Config.in
-index 3d99d47..e26b9e9 100644
---- a/init/Config.in
-+++ b/init/Config.in
-@@ -8,6 +8,7 @@ menu "Init Utilities"
- config INIT
- 	bool "init"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  init is the first program run when the system boots.
-@@ -90,6 +91,7 @@ config FEATURE_INITRD
- config HALT
- 	bool "poweroff, halt, and reboot"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Stop all processes and either halt, reboot, or power off the system.
- 
-diff --git a/libbb/Config.in b/libbb/Config.in
-index bdb6dfa..6505da3 100644
---- a/libbb/Config.in
-+++ b/libbb/Config.in
-@@ -152,6 +152,7 @@ config FEATURE_COPYBUF_KB
- config MONOTONIC_SYSCALL
- 	bool "Use clock_gettime(CLOCK_MONOTONIC) syscall"
- 	default y
-+	depends on PLATFORM_LINUX
- 	help
- 	  Use clock_gettime(CLOCK_MONOTONIC) syscall for measuring
- 	  time intervals (time, ping, traceroute etc need this).
-diff --git a/loginutils/Config.in b/loginutils/Config.in
-index f6c0e2e..79249d1 100644
---- a/loginutils/Config.in
-+++ b/loginutils/Config.in
-@@ -177,6 +177,7 @@ config DELUSER
- config GETTY
- 	bool "getty"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  getty lets you log in on a tty, it is normally invoked by init.
-@@ -200,6 +201,7 @@ config FEATURE_WTMP
- config LOGIN
- 	bool "login"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SUID
- 	select FEATURE_SYSLOG
- 	help
-@@ -309,6 +311,7 @@ config SULOGIN
- config VLOCK
- 	bool "vlock"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SUID
- 	help
- 	  Build the "vlock" applet which allows you to lock (virtual) terminals.
-diff --git a/miscutils/Config.in b/miscutils/Config.in
-index 9a81ecc..f5eb9fb 100644
---- a/miscutils/Config.in
-+++ b/miscutils/Config.in
-@@ -8,6 +8,7 @@ menu "Miscellaneous Utilities"
- config ADJTIMEX
- 	bool "adjtimex"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Adjtimex reads and optionally sets adjustment parameters for
- 	  the Linux clock adjustment algorithm.
-@@ -22,6 +23,7 @@ config BBCONFIG
- config BEEP
- 	bool "beep"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The beep applets beeps in a given freq/Hz.
- 
-@@ -178,6 +180,7 @@ config FEATURE_DC_LIBM
- config DEVFSD
- 	bool "devfsd (obsolete)"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  This is deprecated and should NOT be used anymore.
-@@ -221,6 +224,7 @@ config DEVFSD_VERBOSE
- config FEATURE_DEVFS
- 	bool "Use devfs names for all devices (obsolete)"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This is obsolete and should NOT be used anymore.
- 	  Use linux >= 2.6 (optionally with hotplug) and mdev instead!
-@@ -240,6 +244,7 @@ config DEVMEM
- config EJECT
- 	bool "eject"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Used to eject cdroms. (defaults to /dev/cdrom)
- 
-@@ -254,6 +259,7 @@ config FEATURE_EJECT_SCSI
- config FBSPLASH
- 	bool "fbsplash"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Shows splash image and progress bar on framebuffer device.
- 	  Can be used during boot phase of an embedded device. ~2kb.
-@@ -275,6 +281,7 @@ config FBSPLASH
- config FLASH_LOCK
- 	bool "flash_lock"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The flash_lock binary from mtd-utils as of git head 5ec0c10d0. This
- 	  utility locks part or all of the flash device.
-@@ -282,6 +289,7 @@ config FLASH_LOCK
- config FLASH_UNLOCK
- 	bool "flash_unlock"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The flash_unlock binary from mtd-utils as of git head 5ec0c10d0. This
- 	  utility unlocks part or all of the flash device.
-@@ -289,6 +297,7 @@ config FLASH_UNLOCK
- config FLASH_ERASEALL
- 	bool "flash_eraseall"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The flash_eraseall binary from mtd-utils as of git head c4c6a59eb.
- 	  This utility is used to erase the whole MTD device.
-@@ -296,6 +305,7 @@ config FLASH_ERASEALL
- config IONICE
- 	bool "ionice"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Set/set program io scheduling class and priority
- 	  Requires kernel >= 2.6.13
-@@ -303,6 +313,7 @@ config IONICE
- config INOTIFYD
- 	bool "inotifyd"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Simple inotify daemon. Reports filesystem changes. Requires
- 	  kernel >= 2.6.13
-@@ -401,6 +412,7 @@ config FEATURE_LESS_LINENUMS
- config HDPARM
- 	bool "hdparm"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Get/Set hard drive parameters. Primarily intended for ATA
- 	  drives. Adds about 13k (or around 30k if you enable the
-@@ -517,6 +529,7 @@ config MT
- config RAIDAUTORUN
- 	bool "raidautorun"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  raidautorun tells the kernel md driver to
- 	  search and start RAID arrays.
-@@ -524,7 +537,7 @@ config RAIDAUTORUN
- config READAHEAD
- 	bool "readahead"
- 	default n
--	depends on LFS
-+	depends on LFS && PLATFORM_LINUX
- 	help
- 	  Preload the files listed on the command line into RAM cache so that
- 	  subsequent reads on these files will not block on disk I/O.
-@@ -569,6 +582,7 @@ config STRINGS
- config TASKSET
- 	bool "taskset"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Retrieve or set a processes's CPU affinity.
- 	  This requires sched_{g,s}etaffinity support in your libc.
-@@ -615,6 +629,7 @@ config VOLNAME
- config WATCHDOG
- 	bool "watchdog"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The watchdog utility is used with hardware or software watchdog
- 	  device drivers. It opens the specified watchdog device special file
-diff --git a/modutils/Config.in b/modutils/Config.in
-index d2a2e04..963e28d 100644
---- a/modutils/Config.in
-+++ b/modutils/Config.in
-@@ -4,6 +4,7 @@
- #
- 
- menu "Linux Module Utilities"
-+depends on PLATFORM_LINUX
- 
- config MODPROBE_SMALL
- 	bool "Simplified modutils"
-diff --git a/networking/Config.in b/networking/Config.in
-index 83522ff..0cdf448 100644
---- a/networking/Config.in
-+++ b/networking/Config.in
-@@ -41,6 +41,7 @@ config FEATURE_PREFER_IPV4_ADDRESS
- config VERBOSE_RESOLUTION_ERRORS
- 	bool "Verbose resolution errors"
- 	default n
-+	depends on PLATFORM_LINUX #because of xsocket() in libbb/xfuncs_prinf.c
- 	help
- 	  Enable if you are not satisfied with simplistic
- 	  "can't resolve 'hostname.com'" and want to know more.
-@@ -49,18 +50,21 @@ config VERBOSE_RESOLUTION_ERRORS
- config ARP
- 	bool "arp"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Manipulate the system ARP cache.
- 
- config ARPING
- 	bool "arping"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Ping hosts by ARP packets.
- 
- config BRCTL
- 	bool "brctl"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Manage ethernet bridges.
- 	  Supports addbr/delbr and addif/delif.
-@@ -93,6 +97,7 @@ config DNSD
- config ETHER_WAKE
- 	bool "ether-wake"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Send a magic packet to wake up sleeping machines.
- 
-@@ -256,6 +261,7 @@ config FEATURE_HTTPD_PROXY
- config IFCONFIG
- 	bool "ifconfig"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Ifconfig is used to configure the kernel-resident network interfaces.
- 
-@@ -303,6 +309,7 @@ config FEATURE_IFCONFIG_BROADCAST_PLUS
- config IFENSLAVE
- 	bool "ifenslave"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Userspace application to bind several interfaces
- 	  to a logical interface (use with kernel bonding driver).
-@@ -310,6 +317,7 @@ config IFENSLAVE
- config IFPLUGD
- 	bool "ifplugd"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Network interface plug detection daemon.
- 
-@@ -351,7 +359,7 @@ config FEATURE_IFUPDOWN_IP
- config FEATURE_IFUPDOWN_IP_BUILTIN
- 	bool "Use busybox ip applet"
- 	default y
--	depends on FEATURE_IFUPDOWN_IP
-+	depends on FEATURE_IFUPDOWN_IP && PLATFORM_LINUX
- 	select IP
- 	select FEATURE_IP_ADDRESS
- 	select FEATURE_IP_LINK
-@@ -470,6 +478,7 @@ config FEATURE_INETD_RPC
- config IP
- 	bool "ip"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The "ip" applet is a TCP/IP interface configuration and routing
- 	  utility. You generally don't need "ip" to use busybox with
-@@ -585,6 +594,7 @@ config FEATURE_IPCALC_LONG_OPTIONS
- config NAMEIF
- 	bool "nameif"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  nameif is used to rename network interface by its MAC address.
-@@ -636,6 +646,7 @@ config NC_EXTRA
- config NETSTAT
- 	bool "netstat"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  netstat prints information about the Linux networking subsystem.
- 
-@@ -664,6 +675,7 @@ config NSLOOKUP
- config PING
- 	bool "ping"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  ping uses the ICMP protocol's mandatory ECHO_REQUEST datagram to
- 	  elicit an ICMP ECHO_RESPONSE from a host or gateway.
-@@ -692,12 +704,14 @@ config PSCAN
- config ROUTE
- 	bool "route"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Route displays or manipulates the kernel's IP routing tables.
- 
- config SLATTACH
- 	bool "slattach"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  slattach is a small utility to attach network interfaces to serial
- 	  lines.
-@@ -843,6 +857,7 @@ config TFTP_DEBUG
- config TRACEROUTE
- 	bool "traceroute"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Utility to trace the route of IP packets.
- 
-@@ -883,6 +898,7 @@ config IFUPDOWN_UDHCPC_CMD_OPTIONS
- config VCONFIG
- 	bool "vconfig"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Creates, removes, and configures VLAN interfaces
- 
-@@ -917,6 +933,7 @@ config FEATURE_WGET_LONG_OPTIONS
- config ZCIP
- 	bool "zcip"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  ZCIP provides ZeroConf IPv4 address selection, according to RFC 3927.
-@@ -929,6 +946,7 @@ config ZCIP
- config TCPSVD
- 	bool "tcpsvd"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  tcpsvd listens on a TCP port and runs a program for each new
- 	  connection.
-@@ -936,6 +954,7 @@ config TCPSVD
- config TUNCTL
- 	bool "tunctl"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  tunctl creates or deletes tun devices.
- 
-@@ -950,6 +969,7 @@ config FEATURE_TUNCTL_UG
- config UDPSVD
- 	bool "udpsvd"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  udpsvd listens on an UDP port and runs a program for each new
- 	  connection.
-diff --git a/networking/udhcp/Config.in b/networking/udhcp/Config.in
-index 5f76dd8..af6a925 100644
---- a/networking/udhcp/Config.in
-+++ b/networking/udhcp/Config.in
-@@ -6,6 +6,7 @@
- config APP_UDHCPD
- 	bool "udhcp server (udhcpd)"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  udhcpd is a DHCP server geared primarily toward embedded systems,
- 	  while striving to be fully functional and RFC compliant.
-@@ -49,6 +50,7 @@ config DHCPD_LEASES_FILE
- config APP_UDHCPC
- 	bool "udhcp client (udhcpc)"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  udhcpc is a DHCP client geared primarily toward embedded systems,
- 	  while striving to be fully functional and RFC compliant.
-diff --git a/procps/Config.in b/procps/Config.in
-index 9146ff6..a024c2d 100644
---- a/procps/Config.in
-+++ b/procps/Config.in
-@@ -8,6 +8,7 @@ menu "Process Utilities"
- config FREE
- 	bool "free"
- 	default n
-+	depends on PLATFORM_LINUX #sysinfo()
- 	help
- 	  free displays the total amount of free and used physical and swap
- 	  memory in the system, as well as the buffers used by the kernel.
-@@ -102,7 +103,7 @@ config FEATURE_PS_WIDE
- config FEATURE_PS_TIME
- 	bool "Enable time and elapsed time output"
- 	default n
--	depends on PS && DESKTOP
-+	depends on PS && DESKTOP && PLATFORM_LINUX #sysinfo()
- 	help
- 	  Support -o time and -o etime output specifiers.
- 
-@@ -191,6 +192,7 @@ config FEATURE_TOPMEM
- config UPTIME
- 	bool "uptime"
- 	default n
-+	depends on PLATFORM_LINUX #sysinfo()
- 	help
- 	  uptime gives a one line display of the current time, how long
- 	  the system has been running, how many users are currently logged
-diff --git a/shell/Config.in b/shell/Config.in
-index cf15193..6ae54d1 100644
---- a/shell/Config.in
-+++ b/shell/Config.in
-@@ -349,6 +349,7 @@ config FEATURE_SH_NOFORK
- config CTTYHACK
- 	bool "cttyhack"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  One common problem reported on the mailing list is "can't access tty;
- 	  job control turned off" error message which typically appears when
+ 	if (console[8]) {
+ 		fd = xopen(console, O_RDWR);
 diff --git a/sysklogd/Config.in b/sysklogd/Config.in
-index 0664be0..20940be 100644
+index 0664be0..40601ad 100644
 --- a/sysklogd/Config.in
 +++ b/sysklogd/Config.in
-@@ -97,6 +97,7 @@ config FEATURE_LOGREAD_REDUCED_LOCKING
- config KLOGD
- 	bool "klogd"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  klogd is a utility which intercepts and logs all
- 	  messages from the Linux kernel and sends the messages
-diff --git a/util-linux/Config.in b/util-linux/Config.in
-index 5f5adc0..b7fc332 100644
---- a/util-linux/Config.in
-+++ b/util-linux/Config.in
-@@ -8,6 +8,7 @@ menu "Linux System Utilities"
- config ACPID
- 	bool "acpid"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  acpid listens to ACPI events coming either in textual form from
- 	  /proc/acpi/event (though it is marked deprecated it is still widely
-@@ -30,6 +31,7 @@ config FEATURE_ACPID_COMPAT
- config BLKID
- 	bool "blkid"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select VOLUMEID
- 	help
- 	  Lists labels and UUIDs of all filesystems.
-@@ -39,6 +41,7 @@ config BLKID
- config DMESG
- 	bool "dmesg"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  dmesg is used to examine or control the kernel ring buffer. When the
- 	  Linux kernel prints messages to the system log, they are stored in
-@@ -72,6 +75,7 @@ config FEATURE_DMESG_PRETTY
- config FBSET
- 	bool "fbset"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  fbset is used to show or change the settings of a Linux frame buffer
- 	  device. The frame buffer device provides a simple and unique
-@@ -100,6 +104,7 @@ config FEATURE_FBSET_READMODE
- config FDFLUSH
- 	bool "fdflush"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  fdflush is only needed when changing media on slightly-broken
- 	  removable media drives. It is used to make Linux believe that a
-@@ -112,12 +117,14 @@ config FDFLUSH
- config FDFORMAT
- 	bool "fdformat"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  fdformat is used to low-level format a floppy disk.
- 
- config FDISK
- 	bool "fdisk"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The fdisk utility is used to divide hard disks into one or more
- 	  logical disks, which are generally called partitions. This utility
-@@ -185,6 +192,7 @@ config FEATURE_FDISK_ADVANCED
- config FINDFS
- 	bool "findfs"
- 	default n
-+	depends on PLATFORM_LINUX
- 	select VOLUMEID
- 	help
- 	  Prints the name of a filesystem with given label or UUID.
-@@ -194,6 +202,7 @@ config FINDFS
- config FREERAMDISK
- 	bool "freeramdisk"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Linux allows you to create ramdisks. This utility allows you to
- 	  delete them and completely free all memory that was used for the
-@@ -216,6 +225,7 @@ config FSCK_MINIX
- config MKFS_MINIX
- 	bool "mkfs_minix"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The minix filesystem is a nice, small, compact, read-write filesystem
- 	  with little overhead. If you wish to be able to create minix
-@@ -236,6 +246,7 @@ config FEATURE_MINIX2
- config MKFS_VFAT
- 	bool "mkfs_vfat"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Utility to create FAT32 filesystems.
- 
-@@ -284,6 +295,7 @@ config HD
- config HWCLOCK
- 	bool "hwclock"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The hwclock utility is used to read and set the hardware clock
- 	  on a system. This is primarily used to set the current time on
-@@ -331,6 +343,7 @@ config IPCS
- config LOSETUP
- 	bool "losetup"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  losetup is used to associate or detach a loop device with a regular
- 	  file or block device, and to query the status of a loop device. This
-@@ -339,6 +352,7 @@ config LOSETUP
- config MDEV
- 	bool "mdev"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  mdev is a mini-udev implementation for dynamically creating device
- 	  nodes in the /dev directory.
-@@ -645,6 +659,7 @@ config FEATURE_VOLUMEID_LINUXRAID
- config MOUNT
- 	bool "mount"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  All files and filesystems in Unix are arranged into one big directory
- 	  tree. The 'mount' utility is used to graft a filesystem onto a
-@@ -726,6 +741,7 @@ config FEATURE_MOUNT_FSTAB
- config PIVOT_ROOT
- 	bool "pivot_root"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The pivot_root utility swaps the mount points for the root filesystem
- 	  with some other mounted filesystem. This allows you to do all sorts
-@@ -753,12 +769,14 @@ config RDEV
- config READPROFILE
- 	bool "readprofile"
- 	default n
-+	#depends on PLATFORM_LINUX
- 	help
- 	  This allows you to parse /proc/profile for basic profiling.
- 
- config RTCWAKE
- 	bool "rtcwake"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  Enter a system sleep state until specified wakeup time.
- 
-@@ -778,6 +796,7 @@ config SCRIPTREPLAY
- config SETARCH
- 	bool "setarch"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The linux32 utility is used to create a 32bit environment for the
- 	  specified program (usually a shell). It only makes sense to have
-@@ -787,6 +806,7 @@ config SETARCH
- config SWAPONOFF
- 	bool "swaponoff"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  This option enables both the 'swapon' and the 'swapoff' utilities.
- 	  Once you have created some swap space using 'mkswap', you also need
-@@ -805,6 +825,7 @@ config FEATURE_SWAPON_PRI
- config SWITCH_ROOT
- 	bool "switch_root"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  The switch_root utility is used from initramfs to select a new
- 	  root device. Under initramfs, you have to use this instead of
-@@ -824,6 +845,7 @@ config SWITCH_ROOT
- config UMOUNT
- 	bool "umount"
- 	default n
-+	depends on PLATFORM_LINUX
- 	help
- 	  When you want to remove a mounted filesystem from its current mount
- 	  point, for example when you are shutting down the system, the
-@@ -843,7 +865,7 @@ comment "Common options for mount/umount"
- config FEATURE_MOUNT_LOOP
- 	bool "Support loopback mounts"
- 	default n
--	depends on MOUNT || UMOUNT
-+	depends on (MOUNT || UMOUNT) && PLATFORM_LINUX
- 	help
- 	  Enabling this feature allows automatic mounting of files (containing
- 	  filesystem images) via the linux kernel's loopback devices.
-
-commit c7d180b7b02a591ef134e1c7f086ea46d9f92095
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:37:32 2010 +0200
-
-    init,loginutils: termios portability fixes
-
-diff --git a/init/init.c b/init/init.c
-index 35f64cf..5f60f3b 100644
---- a/init/init.c
-+++ b/init/init.c
-@@ -14,8 +14,16 @@
- #include <paths.h>
- #include <sys/reboot.h>
- #include <sys/resource.h>
-+#ifdef __linux__
- #include <linux/vt.h>
-+#endif
- 
-+/* Used only for sanitizing purposes in set_sane_term() below. On systems where
-+ * the baud rate is stored in a separate field, we can safely disable them. */
-+#ifndef CBAUD
-+# define CBAUD 0
-+# define CBAUDEX 0
-+#endif
- 
- /* Was a CONFIG_xxx option. A lot of people were building
-  * not fully functional init by switching it on! */
-@@ -164,7 +172,9 @@ static void message(int where, const char *fmt, ...)
- 
- static void console_init(void)
- {
-+#ifdef VT_OPENQRY
- 	int vtno;
-+#endif
- 	char *s;
- 
- 	s = getenv("CONSOLE");
-@@ -188,6 +198,7 @@ static void console_init(void)
- 	}
- 
- 	s = getenv("TERM");
-+#ifdef VT_OPENQRY
- 	if (ioctl(STDIN_FILENO, VT_OPENQRY, &vtno) != 0) {
- 		/* Not a linux terminal, probably serial console.
- 		 * Force the TERM setting to vt102
-@@ -196,7 +207,9 @@ static void console_init(void)
- 			putenv((char*)"TERM=vt102");
- 		if (!ENABLE_FEATURE_INIT_SYSLOG)
- 			log_console = NULL;
--	} else if (!s)
-+	} else
-+#endif
-+	if (!s)
- 		putenv((char*)"TERM=linux");
- }
- 
-@@ -218,8 +231,10 @@ static void set_sane_term(void)
- 	tty.c_cc[VSTOP] = 19;	/* C-s */
- 	tty.c_cc[VSUSP] = 26;	/* C-z */
- 
-+#ifdef __linux__
- 	/* use line discipline 0 */
- 	tty.c_line = 0;
-+#endif
- 
- 	/* Make it be sane */
- 	tty.c_cflag &= CBAUD | CBAUDEX | CSIZE | CSTOPB | PARENB | PARODD;
-diff --git a/loginutils/Config.in b/loginutils/Config.in
-index 79249d1..83e5a5b 100644
---- a/loginutils/Config.in
-+++ b/loginutils/Config.in
-@@ -177,7 +177,6 @@ config DELUSER
- config GETTY
- 	bool "getty"
- 	default n
--	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  getty lets you log in on a tty, it is normally invoked by init.
-@@ -201,7 +200,6 @@ config FEATURE_WTMP
- config LOGIN
- 	bool "login"
- 	default n
--	depends on PLATFORM_LINUX
- 	select FEATURE_SUID
- 	select FEATURE_SYSLOG
- 	help
-diff --git a/loginutils/getty.c b/loginutils/getty.c
-index 838adf2..bb38507 100644
---- a/loginutils/getty.c
-+++ b/loginutils/getty.c
-@@ -282,10 +282,8 @@ static void termios_init(struct termios *tp, int speed, struct options *op)
- 	 * reads will be done in raw mode anyway. Errors will be dealt with
- 	 * later on.
- 	 */
--#ifdef __linux__
- 	/* flush input and output queues, important for modems! */
--	ioctl(0, TCFLSH, TCIOFLUSH); /* tcflush(0, TCIOFLUSH)? - same */
--#endif
-+	tcflush(0, TCIOFLUSH);
- 	ispeed = ospeed = speed;
- 	if (speed == B0) {
- 		/* Speed was specified as "0" on command line.
-@@ -299,10 +297,13 @@ static void termios_init(struct termios *tp, int speed, struct options *op)
- 	cfsetispeed(tp, ispeed);
- 	cfsetospeed(tp, ospeed);
- 
--	tp->c_iflag = tp->c_lflag = tp->c_line = 0;
-+	tp->c_iflag = tp->c_lflag = 0;
- 	tp->c_oflag = OPOST | ONLCR;
- 	tp->c_cc[VMIN] = 1;
- 	tp->c_cc[VTIME] = 0;
-+#ifdef __linux__
-+	tp->c_line = 0;
-+#endif
- 
- 	/* Optionally enable hardware flow control */
- #ifdef CRTSCTS
-@@ -360,10 +361,8 @@ static void auto_baud(char *buf, unsigned size_buf, struct termios *tp)
- 		for (bp = buf; bp < buf + nread; bp++) {
- 			if (isdigit(*bp)) {
- 				speed = bcode(bp);
--				if (speed > 0) {
--					tp->c_cflag &= ~CBAUD;
--					tp->c_cflag |= speed;
--				}
-+				if (speed > 0)
-+					cfsetspeed(tp, speed);
- 				break;
- 			}
- 		}
-@@ -417,7 +416,7 @@ static char *get_logname(char *logname, unsigned size_logname,
- 
- 	/* Flush pending input (esp. after parsing or switching the baud rate). */
- 	sleep(1);
--	ioctl(0, TCFLSH, TCIFLUSH); /* tcflush(0, TCIOFLUSH)? - same */
-+	tcflush(0, TCIOFLUSH);
- 
- 	/* Prompt for and read a login name. */
- 	logname[0] = '\0';
-@@ -525,7 +524,9 @@ static void termios_final(struct options *op, struct termios *tp, struct chardat
- 	tp->c_cc[VQUIT] = DEF_QUIT;     /* default quit */
- 	tp->c_cc[VEOF] = DEF_EOF;       /* default EOF character */
- 	tp->c_cc[VEOL] = DEF_EOL;
-+#ifdef VSWTC
- 	tp->c_cc[VSWTC] = DEF_SWITCH;   /* default switch character */
-+#endif
- 
- 	/* Account for special characters seen in input. */
- 	if (cp->eol == CR) {
-@@ -571,8 +572,8 @@ static void termios_final(struct options *op, struct termios *tp, struct chardat
- #endif
- 
- 	/* Finally, make the new settings effective */
--	/* It's tcsetattr_stdin_TCSANOW() + error check */
--	ioctl_or_perror_and_die(0, TCSETS, tp, "%s: TCSETS", op->tty);
-+	if(tcsetattr_stdin_TCSANOW(tp) < 0)
-+		bb_perror_msg_and_die("%s: tcsetattr", op->tty);
- }
- 
- #if ENABLE_FEATURE_UTMP
-@@ -703,8 +704,8 @@ int getty_main(int argc UNUSED_PARAM, char **argv)
- 	 * by patching the SunOS kernel variable "zsadtrlow" to a larger value;
- 	 * 5 seconds seems to be a good value.
- 	 */
--	/* tcgetattr() + error check */
--	ioctl_or_perror_and_die(0, TCGETS, &termios, "%s: TCGETS", options.tty);
-+	if(tcgetattr(0, &termios) < 0)
-+		bb_perror_msg_and_die("%s: tcgetattr", options.tty);
- 
- #ifdef __linux__
- // FIXME: do we need this? Otherwise "-" case seems to be broken...
-diff --git a/loginutils/login.c b/loginutils/login.c
-index 31b25a4..2fd4a65 100644
---- a/loginutils/login.c
-+++ b/loginutils/login.c
-@@ -346,7 +346,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
- 
- 	while (1) {
- 		/* flush away any type-ahead (as getty does) */
--		ioctl(0, TCFLSH, TCIFLUSH);
-+		tcflush(0, TCIFLUSH);
- 
- 		if (!username[0])
- 			get_username_or_die(username, sizeof(username));
-
-commit 11f95a40db05cc277c3c2fe4069160e22f148405
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:38:44 2010 +0200
-
-    init,halt: portability improvements
-    
-    * make init and halt use the same RB_* constants for reboot()
-    * conditionalize the Linux-specific code
-    
-    Inspired by init.init.diff from the Debian kFreeBSD patches at:
-    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian
-
-diff --git a/init/Config.in b/init/Config.in
-index e26b9e9..3d99d47 100644
---- a/init/Config.in
-+++ b/init/Config.in
-@@ -8,7 +8,6 @@ menu "Init Utilities"
- config INIT
- 	bool "init"
- 	default n
--	depends on PLATFORM_LINUX
- 	select FEATURE_SYSLOG
- 	help
- 	  init is the first program run when the system boots.
-@@ -91,7 +90,6 @@ config FEATURE_INITRD
- config HALT
- 	bool "poweroff, halt, and reboot"
- 	default n
--	depends on PLATFORM_LINUX
- 	help
- 	  Stop all processes and either halt, reboot, or power off the system.
- 
-diff --git a/init/halt.c b/init/halt.c
-index c88c333..9876e7c 100644
---- a/init/halt.c
-+++ b/init/halt.c
-@@ -8,7 +8,7 @@
-  */
- 
- #include "libbb.h"
--#include <sys/reboot.h>
-+#include "reboot.h"
- 
- #if ENABLE_FEATURE_WTMP
- #include <sys/utsname.h>
-@@ -36,14 +36,6 @@ static void write_wtmp(void)
- #define write_wtmp() ((void)0)
- #endif
- 
--#ifndef RB_HALT_SYSTEM
--#define RB_HALT_SYSTEM RB_HALT
--#endif
--
--#ifndef RB_POWER_OFF
--#define RB_POWER_OFF RB_POWERDOWN
--#endif
--
- int halt_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
- int halt_main(int argc UNUSED_PARAM, char **argv)
- {
-diff --git a/init/init.c b/init/init.c
-index 5f60f3b..70550fa 100644
---- a/init/init.c
-+++ b/init/init.c
-@@ -12,11 +12,11 @@
- #include "libbb.h"
- #include <syslog.h>
- #include <paths.h>
--#include <sys/reboot.h>
- #include <sys/resource.h>
- #ifdef __linux__
- #include <linux/vt.h>
- #endif
-+#include "reboot.h" /* reboot() constants */
- 
- /* Used only for sanitizing purposes in set_sane_term() below. On systems where
-  * the baud rate is stored in a separate field, we can safely disable them. */
-@@ -95,13 +95,6 @@ enum {
- 	L_LOG = 0x1,
- 	L_CONSOLE = 0x2,
- 	MAYBE_CONSOLE = L_CONSOLE * !ENABLE_FEATURE_EXTRA_QUIET,
--#ifndef RB_HALT_SYSTEM
--	RB_HALT_SYSTEM = 0xcdef0123, /* FIXME: this overflows enum */
--	RB_ENABLE_CAD = 0x89abcdef,
--	RB_DISABLE_CAD = 0,
--	RB_POWER_OFF = 0x4321fedc,
--	RB_AUTOBOOT = 0x01234567,
--#endif
- };
- 
- /* Print a message to the specified device.
-@@ -737,10 +730,12 @@ static void restart_handler(int sig UNUSED_PARAM)
- 		 */
- 		run_shutdown_and_kill_processes();
- 
-+#ifdef RB_ENABLE_CAD
- 		/* Allow Ctrl-Alt-Del to reboot the system.
- 		 * This is how kernel sets it up for init, we follow suit.
- 		 */
- 		reboot(RB_ENABLE_CAD); /* misnomer */
-+#endif
- 
- 		if (open_stdio_to_tty(a->terminal)) {
- 			dbg_message(L_CONSOLE, "Trying to re-exec %s", a->command);
-@@ -849,9 +844,11 @@ int init_main(int argc UNUSED_PARAM, char **argv)
- 		) {
- 			bb_show_usage();
- 		}
-+#ifdef RB_DISABLE_CAD
- 		/* Turn off rebooting via CTL-ALT-DEL - we get a
- 		 * SIGINT on CAD so we can shut things down gracefully... */
- 		reboot(RB_DISABLE_CAD); /* misnomer */
-+#endif
- 	}
- 
- 	/* Figure out where the default console should be */
-@@ -872,6 +869,8 @@ int init_main(int argc UNUSED_PARAM, char **argv)
- 	/* Hello world */
- 	message(MAYBE_CONSOLE | L_LOG, "init started: %s", bb_banner);
- 
-+/* struct sysinfo is linux-specific */
-+#ifdef __linux__
- 	/* Make sure there is enough memory to do something useful. */
- 	if (ENABLE_SWAPONOFF) {
- 		struct sysinfo info;
-@@ -887,6 +886,7 @@ int init_main(int argc UNUSED_PARAM, char **argv)
- 			run_actions(SYSINIT);   /* wait and removing */
- 		}
- 	}
-+#endif
- 
- 	/* Check if we are supposed to be in single user mode */
- 	if (argv[1]
-diff --git a/init/reboot.h b/init/reboot.h
-new file mode 100644
-index 0000000..ff045fd
---- /dev/null
-+++ b/init/reboot.h
-@@ -0,0 +1,31 @@
-+/*
-+ * Definitions related to the reboot() system call,
-+ * shared between init.c and halt.c.
-+ */
-+
-+#include <sys/reboot.h>
-+
-+#ifndef RB_HALT_SYSTEM
-+# if defined(__linux__)
-+#  define RB_HALT_SYSTEM  0xcdef0123
-+#  define RB_ENABLE_CAD   0x89abcdef
-+#  define RB_DISABLE_CAD  0
-+#  define RB_POWER_OFF    0x4321fedc
-+#  define RB_AUTOBOOT     0x01234567
-+# elif defined(RB_HALT)
-+#  define RB_HALT_SYSTEM  RB_HALT
-+# endif
-+#endif
-+
-+/* Stop system and switch power off if possible.  */
-+#ifndef RB_POWER_OFF
-+# if defined(RB_POWERDOWN)
-+#  define RB_POWER_OFF  RB_POWERDOWN
-+# elif defined(__linux__)
-+#  define RB_POWER_OFF  0x4321fedc
-+# else
-+#  warning "poweroff unsupported, using halt as fallback"
-+#  define RB_POWER_OFF  RB_HALT_SYSTEM
-+# endif
-+#endif
-+
-
-commit 39695637c3c157cc6d96939c243e310c8c726b75
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:07 2010 +0200
-
-    init: make the initial $TERM value configurable
-
-diff --git a/init/Config.in b/init/Config.in
-index 3d99d47..0fe4343 100644
---- a/init/Config.in
-+++ b/init/Config.in
-@@ -87,6 +87,18 @@ config FEATURE_INITRD
- 	  This does not apply to initramfs, which runs /init as PID 1 and
- 	  requires no special support.
- 
-+config INIT_TERMINAL_TYPE
-+	string "Initial terminal type"
-+	default "linux"
-+	depends on INIT
-+	help
-+	  This is the initial value set by init for the TERM environment
-+	  variable. This variable is used by programs which make use of
-+	  extended terminal capabilities.
-+
-+	  Note that on Linux, init attempts to detect serial terminal and
-+	  sets TERM to "vt102" if one is found.
-+
- config HALT
- 	bool "poweroff, halt, and reboot"
- 	default n
-diff --git a/init/init.c b/init/init.c
-index 70550fa..4743cec 100644
---- a/init/init.c
-+++ b/init/init.c
-@@ -203,7 +203,7 @@ static void console_init(void)
- 	} else
- #endif
- 	if (!s)
--		putenv((char*)"TERM=linux");
-+		putenv((char*)"TERM=" CONFIG_INIT_TERMINAL_TYPE);
- }
- 
- /* Set terminal settings to reasonable defaults.
-
-commit cdcfb0b2a40b4ab760967c4e97e0920ec8e6c3dd
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:29 2010 +0200
-
-    libbb.h: add device names for Hurd and FreeBSD
-    
-    Adapted from include.libbb.diff from the Debian kFreeBSD people:
-    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian
-
-diff --git a/include/libbb.h b/include/libbb.h
-index a4ad6ed..24ebe9e 100644
---- a/include/libbb.h
-+++ b/include/libbb.h
-@@ -1496,7 +1496,27 @@ extern const char bb_default_login_shell[];
- /* "sh" */
- #define DEFAULT_SHELL_SHORT_NAME     (bb_default_login_shell+6)
- 
--#if ENABLE_FEATURE_DEVFS
-+/* The following devices are the same on all systems.  */
-+#define CURRENT_TTY "/dev/tty"
-+#define DEV_CONSOLE "/dev/console"
-+
-+#if defined(__FreeBSD_kernel__)
-+# define CURRENT_VC CURRENT_TTY
-+# define VC_1 "/dev/ttyv0"
-+# define VC_2 "/dev/ttyv1"
-+# define VC_3 "/dev/ttyv2"
-+# define VC_4 "/dev/ttyv3"
-+# define VC_5 "/dev/ttyv4"
-+# define VC_FORMAT "/dev/ttyv%d"
-+#elif defined(__GNU__)
-+# define CURRENT_VC CURRENT_TTY
-+# define VC_1 "/dev/tty1"
-+# define VC_2 "/dev/tty2"
-+# define VC_3 "/dev/tty3"
-+# define VC_4 "/dev/tty4"
-+# define VC_5 "/dev/tty5"
-+# define VC_FORMAT "/dev/tty%d"
-+#elif ENABLE_FEATURE_DEVFS /* from now on, assume Linux naming */
- # define CURRENT_VC "/dev/vc/0"
- # define VC_1 "/dev/vc/1"
- # define VC_2 "/dev/vc/2"
-@@ -1543,10 +1563,6 @@ extern const char bb_default_login_shell[];
- # define FB_0 "/dev/fb0"
- #endif
- 
--/* The following devices are the same on devfs and non-devfs systems.  */
--#define CURRENT_TTY "/dev/tty"
--#define DEV_CONSOLE "/dev/console"
--
- 
- #ifndef RB_POWER_OFF
- /* Stop system and switch power off if possible.  */
-
-commit df6a5da042956bca95b3828dae08a876137603c4
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:33 2010 +0200
-
-    mkdir: fix -p on FreeBSD
-    
-    This patch is libbb.make_directory.diff from Debian kFreeBSD at:
-    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian
-
-diff --git a/libbb/make_directory.c b/libbb/make_directory.c
-index 391493c..9843270 100644
---- a/libbb/make_directory.c
-+++ b/libbb/make_directory.c
-@@ -61,7 +61,7 @@ int FAST_FUNC bb_make_directory(char *path, long mode, int flags)
- 		if (mkdir(path, 0777) < 0) {
- 			/* If we failed for any other reason than the directory
- 			 * already exists, output a diagnostic and return -1. */
--			if (errno != EEXIST
-+			if ((errno != EEXIST && errno != EISDIR)
- 			 || !(flags & FILEUTILS_RECUR)
- 			 || ((stat(path, &st) < 0) || !S_ISDIR(st.st_mode))
- 			) {
-
-commit 2873b13b4a7e08eb464a25173775489e66ac46ca
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:59:58 2010 +0200
-
-    klogd: support /dev/klog in addition to klogctl()
-    
-    The klogctl() interface allows reading past messages from the kernel's
-    ring buffer, but is Linux-specific. The more portable method of reading
-    from _PATH_KLOG is added as an alternative.
-    
-    Adapted from the Debian kFreeBSD patch at:
-    http://svn.debian.org/viewsvn/d-i/people/slackydeb/kfreebsd/busybox/1.14/debian/klogd.diff
-
-diff --git a/sysklogd/Config.in b/sysklogd/Config.in
-index 20940be..40601ad 100644
---- a/sysklogd/Config.in
-+++ b/sysklogd/Config.in
-@@ -97,7 +97,6 @@ config FEATURE_LOGREAD_REDUCED_LOCKING
- config KLOGD
- 	bool "klogd"
- 	default n
--	depends on PLATFORM_LINUX
- 	help
- 	  klogd is a utility which intercepts and logs all
- 	  messages from the Linux kernel and sends the messages
-@@ -105,6 +104,25 @@ config KLOGD
+@@ -104,6 +104,25 @@ config KLOGD
  	  you wish to record the messages produced by the kernel,
  	  you should enable this option.
  
@@ -4961,315 +4599,287 @@ index c54e80a..1b2fdf2 100644
  		if (n < 0) {
  			if (errno == EINTR)
  				continue;
-
-commit 92dbab84d710e69894b0442e52cf95f2e4cb7336
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:39:24 2010 +0200
-
-    libbb: conditionalize AF_* usage in error reporting
-
-diff --git a/libbb/xfuncs_printf.c b/libbb/xfuncs_printf.c
-index 5f56b36..2f07343 100644
---- a/libbb/xfuncs_printf.c
-+++ b/libbb/xfuncs_printf.c
-@@ -418,8 +418,12 @@ int FAST_FUNC xsocket(int domain, int type, int protocol)
- 		/* Hijack vaguely related config option */
- #if ENABLE_VERBOSE_RESOLUTION_ERRORS
- 		const char *s = "INET";
-+# ifdef AF_PACKET
- 		if (domain == AF_PACKET) s = "PACKET";
-+# endif
-+# ifdef AF_NETLINK
- 		if (domain == AF_NETLINK) s = "NETLINK";
-+# endif
- IF_FEATURE_IPV6(if (domain == AF_INET6) s = "INET6";)
- 		bb_perror_msg_and_die("socket(AF_%s)", s);
- #else
-diff --git a/networking/Config.in b/networking/Config.in
-index 0cdf448..18df278 100644
---- a/networking/Config.in
-+++ b/networking/Config.in
-@@ -41,7 +41,6 @@ config FEATURE_PREFER_IPV4_ADDRESS
- config VERBOSE_RESOLUTION_ERRORS
- 	bool "Verbose resolution errors"
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 5f5adc0..bcfd5ad 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -8,6 +8,7 @@ menu "Linux System Utilities"
+ config ACPID
+ 	bool "acpid"
  	default n
--	depends on PLATFORM_LINUX #because of xsocket() in libbb/xfuncs_prinf.c
++	depends on PLATFORM_LINUX
  	help
- 	  Enable if you are not satisfied with simplistic
- 	  "can't resolve 'hostname.com'" and want to know more.
-
-commit 8452cd67139829d47873aeffec17e1443c9b88c7
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:20 2010 +0200
-
-    stty: fix undefined IDX_* on missing termios constants
-
-diff --git a/coreutils/Config.in b/coreutils/Config.in
-index 6648111..cacfb96 100644
---- a/coreutils/Config.in
-+++ b/coreutils/Config.in
-@@ -606,7 +606,6 @@ config FEATURE_STAT_FORMAT
- config STTY
- 	bool "stty"
+ 	  acpid listens to ACPI events coming either in textual form from
+ 	  /proc/acpi/event (though it is marked deprecated it is still widely
+@@ -30,6 +31,7 @@ config FEATURE_ACPID_COMPAT
+ config BLKID
+ 	bool "blkid"
  	default n
--	depends on PLATFORM_LINUX
++	depends on PLATFORM_LINUX
+ 	select VOLUMEID
  	help
- 	  stty is used to change and print terminal line settings.
- 
-diff --git a/coreutils/stty.c b/coreutils/stty.c
-index e02fe7c..3b533d0 100644
---- a/coreutils/stty.c
-+++ b/coreutils/stty.c
-@@ -1088,27 +1088,32 @@ static void set_mode(const struct mode_info *info, int reversed,
- 			mode->c_cc[VTIME] = 0;
- 		}
- 	}
--	else if (IXANY && info == &mode_info[IDX_decctlq]) {
-+#if IXANY
-+	else if (info == &mode_info[IDX_decctlq]) {
- 		if (reversed)
- 			mode->c_iflag |= IXANY;
- 		else
- 			mode->c_iflag &= ~IXANY;
- 	}
--	else if (TABDLY && info == &mode_info[IDX_tabs]) {
-+#endif
-+#if TABDLY
-+	else if (info == &mode_info[IDX_tabs]) {
- 		if (reversed)
- 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB3;
- 		else
- 			mode->c_oflag = (mode->c_oflag & ~TABDLY) | TAB0;
- 	}
--	else if (OXTABS && info == &mode_info[IDX_tabs]) {
-+#endif
-+#if OXTABS	
-+	else if (info == &mode_info[IDX_tabs]) {
- 		if (reversed)
- 			mode->c_oflag |= OXTABS;
- 		else
- 			mode->c_oflag &= ~OXTABS;
--	} else
--	if (XCASE && IUCLC && OLCUC
--	 && (info == &mode_info[IDX_lcase] || info == &mode_info[IDX_LCASE])
--	) {
-+	}
-+#endif
-+#if XCASE && IUCLC && OLCUC
-+	else if (info==&mode_info[IDX_lcase] || info==&mode_info[IDX_LCASE]) {
- 		if (reversed) {
- 			mode->c_lflag &= ~XCASE;
- 			mode->c_iflag &= ~IUCLC;
-@@ -1118,7 +1123,9 @@ static void set_mode(const struct mode_info *info, int reversed,
- 			mode->c_iflag |= IUCLC;
- 			mode->c_oflag |= OLCUC;
- 		}
--	} else if (info == &mode_info[IDX_crt]) {
-+	}
-+#endif
-+	else if (info == &mode_info[IDX_crt]) {
- 		mode->c_lflag |= ECHOE | ECHOCTL | ECHOKE;
- 	} else if (info == &mode_info[IDX_dec]) {
- 		mode->c_cc[VINTR] = 3; /* ^C */
-
-commit f861b6ffab812d3113118a8f56f67147156c5a7e
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:10 2010 +0200
-
-    cttyhack: serial console detection is Linux-specific
-
-diff --git a/shell/Config.in b/shell/Config.in
-index 6ae54d1..cf15193 100644
---- a/shell/Config.in
-+++ b/shell/Config.in
-@@ -349,7 +349,6 @@ config FEATURE_SH_NOFORK
- config CTTYHACK
- 	bool "cttyhack"
+ 	  Lists labels and UUIDs of all filesystems.
+@@ -39,6 +41,7 @@ config BLKID
+ config DMESG
+ 	bool "dmesg"
  	default n
--	depends on PLATFORM_LINUX
++	depends on PLATFORM_LINUX
  	help
- 	  One common problem reported on the mailing list is "can't access tty;
- 	  job control turned off" error message which typically appears when
-diff --git a/shell/cttyhack.c b/shell/cttyhack.c
-index 572a3af..5d8b9b2 100644
---- a/shell/cttyhack.c
-+++ b/shell/cttyhack.c
-@@ -53,13 +53,19 @@ int cttyhack_main(int argc UNUSED_PARAM, char **argv)
- 	}
- 
- 	strcpy(console, "/dev/tty");
-+
-+#ifdef TIOCGSERIAL
- 	if (ioctl(0, TIOCGSERIAL, &u.sr) == 0) {
- 		/* this is a serial console */
- 		sprintf(console + 8, "S%d", u.sr.line);
--	} else if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
-+	}
-+#endif
-+#ifdef __linux__
-+	if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
- 		/* this is linux virtual tty */
- 		sprintf(console + 8, "S%d" + 1, u.vt.v_active);
- 	}
-+#endif
- 
- 	if (console[8]) {
- 		fd = xopen(console, O_RDWR);
-
-commit 585f610e02ce741654d437a48f3310086c4c8fa3
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:25 2010 +0200
-
-    tcpsvd,udpsvd: conditionalize usage of SO_ORIGINAL_DST
-    
-    On systems without this call, $TCPORIGDSTADDR is not set.
-
-diff --git a/networking/Config.in b/networking/Config.in
-index 18df278..3fe64ac 100644
---- a/networking/Config.in
-+++ b/networking/Config.in
-@@ -945,7 +945,6 @@ config ZCIP
- config TCPSVD
- 	bool "tcpsvd"
+ 	  dmesg is used to examine or control the kernel ring buffer. When the
+ 	  Linux kernel prints messages to the system log, they are stored in
+@@ -72,6 +75,7 @@ config FEATURE_DMESG_PRETTY
+ config FBSET
+ 	bool "fbset"
  	default n
--	depends on PLATFORM_LINUX
++	depends on PLATFORM_LINUX
  	help
- 	  tcpsvd listens on a TCP port and runs a program for each new
- 	  connection.
-@@ -968,7 +967,6 @@ config FEATURE_TUNCTL_UG
- config UDPSVD
- 	bool "udpsvd"
+ 	  fbset is used to show or change the settings of a Linux frame buffer
+ 	  device. The frame buffer device provides a simple and unique
+@@ -100,6 +104,7 @@ config FEATURE_FBSET_READMODE
+ config FDFLUSH
+ 	bool "fdflush"
  	default n
--	depends on PLATFORM_LINUX
++	depends on PLATFORM_LINUX
  	help
- 	  udpsvd listens on an UDP port and runs a program for each new
- 	  connection.
-diff --git a/networking/tcpudp.c b/networking/tcpudp.c
-index 98a2aa8..70bf5dd 100644
---- a/networking/tcpudp.c
-+++ b/networking/tcpudp.c
-@@ -30,9 +30,12 @@
-  */
- 
- #include "libbb.h"
-+
- /* Wants <limits.h> etc, thus included after libbb.h: */
-+#ifdef __linux__
- #include <linux/types.h> /* for __be32 etc */
- #include <linux/netfilter_ipv4.h>
-+#endif
- 
- // TODO: move into this file:
- #include "tcpudp_perhost.h"
-@@ -465,6 +468,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
- 			/* setup ucspi env */
- 			const char *proto = tcp ? "TCP" : "UDP";
- 
-+#ifdef SO_ORIGINAL_DST
- 			/* Extract "original" destination addr:port
- 			 * from Linux firewall. Useful when you redirect
- 			 * an outbond connection to local handler, and it needs
-@@ -474,6 +478,7 @@ int tcpudpsvd_main(int argc UNUSED_PARAM, char **argv)
- 				xsetenv_plain("TCPORIGDSTADDR", addr);
- 				free(addr);
- 			}
-+#endif
- 			xsetenv_plain("PROTO", proto);
- 			xsetenv_proto(proto, "LOCALADDR", local_addr);
- 			xsetenv_proto(proto, "REMOTEADDR", remote_addr);
-
-commit edc4fed8fd174979db1ddd1abf549bf7a2693f67
-Author: Jeremie Koenig <jk@jk.fr.eu.org>
-Date:   Thu May 27 15:46:23 2010 +0200
-
-    vlock: disable linux console calls on other systems
-
-diff --git a/loginutils/Config.in b/loginutils/Config.in
-index 83e5a5b..f6c0e2e 100644
---- a/loginutils/Config.in
-+++ b/loginutils/Config.in
-@@ -309,7 +309,6 @@ config SULOGIN
- config VLOCK
- 	bool "vlock"
+ 	  fdflush is only needed when changing media on slightly-broken
+ 	  removable media drives. It is used to make Linux believe that a
+@@ -112,12 +117,14 @@ config FDFLUSH
+ config FDFORMAT
+ 	bool "fdformat"
  	default n
--	depends on PLATFORM_LINUX
++	depends on PLATFORM_LINUX
+ 	help
+ 	  fdformat is used to low-level format a floppy disk.
+ 
+ config FDISK
+ 	bool "fdisk"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The fdisk utility is used to divide hard disks into one or more
+ 	  logical disks, which are generally called partitions. This utility
+@@ -185,6 +192,7 @@ config FEATURE_FDISK_ADVANCED
+ config FINDFS
+ 	bool "findfs"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	select VOLUMEID
+ 	help
+ 	  Prints the name of a filesystem with given label or UUID.
+@@ -194,6 +202,7 @@ config FINDFS
+ config FREERAMDISK
+ 	bool "freeramdisk"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Linux allows you to create ramdisks. This utility allows you to
+ 	  delete them and completely free all memory that was used for the
+@@ -216,6 +225,7 @@ config FSCK_MINIX
+ config MKFS_MINIX
+ 	bool "mkfs_minix"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The minix filesystem is a nice, small, compact, read-write filesystem
+ 	  with little overhead. If you wish to be able to create minix
+@@ -236,6 +246,7 @@ config FEATURE_MINIX2
+ config MKFS_VFAT
+ 	bool "mkfs_vfat"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Utility to create FAT32 filesystems.
+ 
+@@ -284,6 +295,7 @@ config HD
+ config HWCLOCK
+ 	bool "hwclock"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The hwclock utility is used to read and set the hardware clock
+ 	  on a system. This is primarily used to set the current time on
+@@ -323,6 +335,7 @@ config IPCRM
+ config IPCS
+ 	bool "ipcs"
+ 	default n
++	depends on PLATFORM_LINUX
  	select FEATURE_SUID
  	help
- 	  Build the "vlock" applet which allows you to lock (virtual) terminals.
-diff --git a/loginutils/vlock.c b/loginutils/vlock.c
-index 85f489c..59aeb54 100644
---- a/loginutils/vlock.c
-+++ b/loginutils/vlock.c
-@@ -15,9 +15,11 @@
- /* Fixed by Erik Andersen to do passwords the tinylogin way...
-  * It now works with md5, sha1, etc passwords. */
+ 	  The ipcs utility is used to provide information on the currently
+@@ -331,6 +344,7 @@ config IPCS
+ config LOSETUP
+ 	bool "losetup"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  losetup is used to associate or detach a loop device with a regular
+ 	  file or block device, and to query the status of a loop device. This
+@@ -339,6 +353,7 @@ config LOSETUP
+ config MDEV
+ 	bool "mdev"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  mdev is a mini-udev implementation for dynamically creating device
+ 	  nodes in the /dev directory.
+@@ -645,6 +660,7 @@ config FEATURE_VOLUMEID_LINUXRAID
+ config MOUNT
+ 	bool "mount"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  All files and filesystems in Unix are arranged into one big directory
+ 	  tree. The 'mount' utility is used to graft a filesystem onto a
+@@ -726,6 +742,7 @@ config FEATURE_MOUNT_FSTAB
+ config PIVOT_ROOT
+ 	bool "pivot_root"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The pivot_root utility swaps the mount points for the root filesystem
+ 	  with some other mounted filesystem. This allows you to do all sorts
+@@ -753,12 +770,14 @@ config RDEV
+ config READPROFILE
+ 	bool "readprofile"
+ 	default n
++	#depends on PLATFORM_LINUX
+ 	help
+ 	  This allows you to parse /proc/profile for basic profiling.
  
--#include <sys/vt.h>
+ config RTCWAKE
+ 	bool "rtcwake"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  Enter a system sleep state until specified wakeup time.
+ 
+@@ -778,6 +797,7 @@ config SCRIPTREPLAY
+ config SETARCH
+ 	bool "setarch"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The linux32 utility is used to create a 32bit environment for the
+ 	  specified program (usually a shell). It only makes sense to have
+@@ -787,6 +807,7 @@ config SETARCH
+ config SWAPONOFF
+ 	bool "swaponoff"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  This option enables both the 'swapon' and the 'swapoff' utilities.
+ 	  Once you have created some swap space using 'mkswap', you also need
+@@ -805,6 +826,7 @@ config FEATURE_SWAPON_PRI
+ config SWITCH_ROOT
+ 	bool "switch_root"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  The switch_root utility is used from initramfs to select a new
+ 	  root device. Under initramfs, you have to use this instead of
+@@ -824,6 +846,7 @@ config SWITCH_ROOT
+ config UMOUNT
+ 	bool "umount"
+ 	default n
++	depends on PLATFORM_LINUX
+ 	help
+ 	  When you want to remove a mounted filesystem from its current mount
+ 	  point, for example when you are shutting down the system, the
+@@ -843,7 +866,7 @@ comment "Common options for mount/umount"
+ config FEATURE_MOUNT_LOOP
+ 	bool "Support loopback mounts"
+ 	default n
+-	depends on MOUNT || UMOUNT
++	depends on (MOUNT || UMOUNT) && PLATFORM_LINUX
+ 	help
+ 	  Enabling this feature allows automatic mounting of files (containing
+ 	  filesystem images) via the linux kernel's loopback devices.
+diff --git a/util-linux/umount.c b/util-linux/umount.c
+index a4b2bd0..a19f86c 100644
+--- a/util-linux/umount.c
++++ b/util-linux/umount.c
+@@ -39,6 +39,10 @@
+ # define MS_RELATIME    (1 << 21)
+ #endif
  #include "libbb.h"
- 
-+#ifdef __linux__
-+#include <sys/vt.h>
++#ifndef PATH_MAX
++# define PATH_MAX (4*1024)
++#endif
 +
- static void release_vt(int signo UNUSED_PARAM)
+ 
+ #if defined(__dietlibc__)
+ /* 16.12.2006, Sampo Kellomaki (sampo@iki.fi)
+@@ -69,7 +73,7 @@ int umount_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int umount_main(int argc UNUSED_PARAM, char **argv)
  {
- 	/* If -a, param is 0, which means:
-@@ -30,14 +32,17 @@ static void acquire_vt(int signo UNUSED_PARAM)
- 	/* ACK to kernel that switch to console is successful */
- 	ioctl(STDIN_FILENO, VT_RELDISP, VT_ACKACQ);
- }
-+#endif
+ 	int doForce;
+-	char *const path = xmalloc(PATH_MAX + 2); /* to save stack */
++	char *const buf = xmalloc(PATH_MAX * 2 + 128); /* to save stack */
+ 	struct mntent me;
+ 	FILE *fp;
+ 	char *fstype = NULL;
+@@ -100,7 +104,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 		if (opt & OPT_ALL)
+ 			bb_error_msg_and_die("can't open '%s'", bb_path_mtab_file);
+ 	} else {
+-		while (getmntent_r(fp, &me, path, PATH_MAX)) {
++		while (getmntent_r(fp, &me, buf, PATH_MAX * 2 + 128)) {
+ 			/* Match fstype if passed */
+ 			if (!match_fstype(&me, fstype))
+ 				continue;
+@@ -124,10 +128,11 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 	for (;;) {
+ 		int curstat;
+ 		char *zapit = *argv;
++		char *path;
  
- int vlock_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
- int vlock_main(int argc UNUSED_PARAM, char **argv)
- {
-+#ifdef __linux__
- 	struct vt_mode vtm;
-+	struct vt_mode ovtm;
-+#endif
- 	struct termios term;
- 	struct termios oterm;
--	struct vt_mode ovtm;
- 	struct passwd *pw;
+ 		// Do we already know what to umount this time through the loop?
+ 		if (m)
+-			safe_strncpy(path, m->dir, PATH_MAX);
++			path = xstrdup(m->dir);
+ 		// For umount -a, end of mtab means time to exit.
+ 		else if (opt & OPT_ALL)
+ 			break;
+@@ -136,10 +141,12 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 			if (!zapit)
+ 				break;
+ 			argv++;
+-			realpath(zapit, path);
+-			for (m = mtl; m; m = m->next)
+-				if (!strcmp(path, m->dir) || !strcmp(path, m->device))
+-					break;
++			path = xmalloc_realpath(zapit);
++			if (path) {
++				for (m = mtl; m; m = m->next)
++					if (strcmp(path, m->dir) == 0 || strcmp(path, m->device) == 0)
++						break;
++			}
+ 		}
+ 		// If we couldn't find this sucker in /etc/mtab, punt by passing our
+ 		// command line argument straight to the umount syscall.  Otherwise,
+@@ -181,9 +188,13 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 		// Find next matching mtab entry for -a or umount /dev
+ 		// Note this means that "umount /dev/blah" will unmount all instances
+ 		// of /dev/blah, not just the most recent.
+-		if (m) while ((m = m->next) != NULL)
+-			if ((opt & OPT_ALL) || !strcmp(path, m->device))
+-				break;
++		if (m) {
++			while ((m = m->next) != NULL)
++				// NB: if m is non-NULL, path is non-NULL as well
++				if ((opt & OPT_ALL) || strcmp(path, m->device) == 0)
++					break;
++		}
++		free(path);
+ 	}
  
- 	pw = xgetpwuid(getuid());
-@@ -55,6 +60,7 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
- 		+ (1 << SIGINT )
- 		, SIG_IGN);
+ 	// Free mtab list if necessary
+@@ -195,7 +206,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
+ 			free(mtl);
+ 			mtl = m;
+ 		}
+-		free(path);
++		free(buf);
+ 	}
  
-+#ifdef __linux__
- 	/* We will use SIGUSRx for console switch control: */
- 	/* 1: set handlers */
- 	signal_SA_RESTART_empty_mask(SIGUSR1, release_vt);
-@@ -62,12 +68,14 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
- 	/* 2: unmask them */
- 	sig_unblock(SIGUSR1);
- 	sig_unblock(SIGUSR2);
-+#endif
- 
- 	/* Revert stdin/out to our controlling tty
- 	 * (or die if we have none) */
- 	xmove_fd(xopen(CURRENT_TTY, O_RDWR), STDIN_FILENO);
- 	xdup2(STDIN_FILENO, STDOUT_FILENO);
- 
-+#ifdef __linux__
- 	xioctl(STDIN_FILENO, VT_GETMODE, &vtm);
- 	ovtm = vtm;
- 	/* "console switches are controlled by us, not kernel!" */
-@@ -75,6 +83,7 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
- 	vtm.relsig = SIGUSR1;
- 	vtm.acqsig = SIGUSR2;
- 	ioctl(STDIN_FILENO, VT_SETMODE, &vtm);
-+#endif
- 
- 	tcgetattr(STDIN_FILENO, &oterm);
- 	term = oterm;
-@@ -95,7 +104,9 @@ int vlock_main(int argc UNUSED_PARAM, char **argv)
- 		puts("Password incorrect");
- 	} while (1);
- 
-+#ifdef __linux__
- 	ioctl(STDIN_FILENO, VT_SETMODE, &ovtm);
-+#endif
- 	tcsetattr_stdin_TCSANOW(&oterm);
- 	fflush_stdout_and_exit(EXIT_SUCCESS);
- }
+ 	return status;

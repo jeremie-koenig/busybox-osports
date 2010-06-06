@@ -1,3 +1,11 @@
+busybox (1:1.15.3-1jk2) unstable; urgency=low
+
+  * split debian/patches/osports.patch to make dpkg-source happy
+  * make stat, stty and ipcs depend on PLATFORM_LINUX as they
+    don't work on FreeBSD yet
+
+ -- Jeremie Koenig <jk@jk.fr.eu.org>  Sun, 06 Jun 2010 05:33:48 +0200
+
 busybox (1:1.15.3-1jk1) unstable; urgency=low
 
   * Non-maintainer non-upload.
