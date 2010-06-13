@@ -1,3 +1,10 @@
+busybox (1:1.15.3-1jk3) unstable; urgency=low
+
+  * Enable CONFIG_FEATURE_INITRD to be able to run init as linuxrc
+    on Hurd, where it does not have pid 1.
+
+ -- Jeremie Koenig <jk@jk.fr.eu.org>  Sun, 13 Jun 2010 03:53:44 +0200
+
 busybox (1:1.15.3-1jk2) unstable; urgency=low
 
   * split debian/patches/osports.patch to make dpkg-source happy
