@@ -1333,7 +1333,6 @@ int sed_main(int argc UNUSED_PARAM, char **argv)
 		if (opt & OPT_in_place)
 			bb_error_msg_and_die(bb_msg_requires_arg, "-i");
 		add_input_file(stdin);
-		process_files();
 	} else {
 		int i;
 		FILE *file;
@@ -1365,6 +1364,8 @@ int sed_main(int argc UNUSED_PARAM, char **argv)
 
 			/* Set permissions/owner of output file */
 			fstat(fileno(file), &statbuf);
+			/* chmod'ing AFTER chown would preserve suid/sgid bits,
+			 * but GNU sed 4.2.1 does not preserve them either */
 			fchmod(nonstdoutfd, statbuf.st_mode);
 			fchown(nonstdoutfd, statbuf.st_uid, statbuf.st_gid);
 			add_input_file(file);
@@ -1377,9 +1378,13 @@ int sed_main(int argc UNUSED_PARAM, char **argv)
 			free(G.outname);
 			G.outname = NULL;
 		}
-		if (G.input_file_count > G.current_input_file)
-			process_files();
+		/* Here, to handle "sed 'cmds' nonexistent_file" case we did:
+		 * if (G.current_input_file >= G.input_file_count)
+		 *	return status;
+		 * but it's not needed since process_files() works correctly
+		 * in this case too. */
 	}
+	process_files();
 
 	return status;
 }

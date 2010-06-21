@@ -72,7 +72,7 @@
 //config:config FEATURE_DATE_NANO
 //config:	bool "Support %[num]N nanosecond format specifier"
 //config:	default n
-//config:	depends on DATE
+//config:	depends on DATE && PLATFORM_LINUX # syscall(__NR_clock_gettime)
 //config:	help
 //config:	  Support %[num]N format specifier. Adds ~250 bytes of code.
 //config:
@@ -93,6 +93,9 @@
 //config:	  MMDDhhmm[[YY]YY][.ss] format.
 
 #include "libbb.h"
+#if ENABLE_FEATURE_DATE_NANO
+# include <sys/syscall.h>
+#endif
 
 enum {
 	OPT_RFC2822   = (1 << 0), /* R */
@@ -208,7 +211,9 @@ int date_main(int argc UNUSED_PARAM, char **argv)
 #endif
 	} else {
 #if ENABLE_FEATURE_DATE_NANO
-		clock_gettime(CLOCK_REALTIME, &ts);
+		/* libc has incredibly messy way of doing this,
+		 * typically requiring -lrt. We just skip all this mess */
+		syscall(__NR_clock_gettime, CLOCK_REALTIME, &ts);
 #else
 		time(&ts.tv_sec);
 #endif

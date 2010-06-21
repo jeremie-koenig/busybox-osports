@@ -16,6 +16,7 @@
 #define HAVE_SETBIT 1
 #define HAVE_STRCASESTR 1
 #define HAVE_STRCHRNUL 1
+#define HAVE_STRSEP 1
 #define HAVE_STRSIGNAL 1
 #define HAVE_VASPRINTF 1
 
@@ -168,10 +169,10 @@
 #if defined(__BIG_ENDIAN__) && __BIG_ENDIAN__
 # define BB_BIG_ENDIAN 1
 # define BB_LITTLE_ENDIAN 0
-#elif __BYTE_ORDER == __BIG_ENDIAN
+#elif defined(__BYTE_ORDER) && __BYTE_ORDER == __BIG_ENDIAN
 # define BB_BIG_ENDIAN 1
 # define BB_LITTLE_ENDIAN 0
-#elif __BYTE_ORDER == __LITTLE_ENDIAN
+#elif (defined(__BYTE_ORDER) && __BYTE_ORDER == __LITTLE_ENDIAN) || defined(__386__)
 # define BB_BIG_ENDIAN 0
 # define BB_LITTLE_ENDIAN 1
 #else
@@ -353,6 +354,7 @@ typedef unsigned smalluint;
 # undef HAVE_SETBIT
 # undef HAVE_STRCASESTR
 # undef HAVE_STRCHRNUL
+# undef HAVE_STRSEP
 # undef HAVE_STRSIGNAL
 # undef HAVE_VASPRINTF
 #endif
@@ -389,6 +391,10 @@ extern char *strcasestr(const char *s, const char *pattern) FAST_FUNC;
 
 #ifndef HAVE_STRCHRNUL
 extern char *strchrnul(const char *s, int c) FAST_FUNC;
+#endif
+
+#ifndef HAVE_STRSEP
+extern char *strsep(char **stringp, const char *delim) FAST_FUNC;
 #endif
 
 #ifndef HAVE_STRSIGNAL
