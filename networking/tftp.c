@@ -119,7 +119,7 @@ static void progress_meter(int flag)
 	if (flag == 0) {
 		/* last call to progress_meter */
 		alarm(0);
-		fputc('\n', stderr);
+		bb_putchar_stderr('\n');
 	} else {
 		if (flag == -1) { /* first call to progress_meter */
 			signal_SA_RESTART_empty_mask(SIGALRM, progress_meter);
@@ -582,7 +582,8 @@ static int tftp_protocol(
 			 * "An option not acknowledged by the server
 			 * must be ignored by the client and server
 			 * as if it were never requested." */
-			bb_error_msg("server only supports blocksize of 512");
+			if (blksize != TFTP_BLKSIZE_DEFAULT)
+				bb_error_msg("falling back to blocksize "TFTP_BLKSIZE_DEFAULT_STR);
 			blksize = TFTP_BLKSIZE_DEFAULT;
 			io_bufsize = TFTP_BLKSIZE_DEFAULT + 4;
 		}

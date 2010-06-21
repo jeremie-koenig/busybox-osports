@@ -119,9 +119,7 @@ enum { NOPTS = ARRAY_SIZE(optletters_optnames) };
 
 /* ============ Misc data */
 
-static const char homestr[] ALIGN1 = "HOME";
-static const char snlfmt[] ALIGN1 = "%s\n";
-static const char msg_illnum[] ALIGN1 = "Illegal number: %s";
+#define msg_illnum "Illegal number: %s"
 
 /*
  * We enclose jmp_buf in a structure so that we can declare pointers to
@@ -277,6 +275,14 @@ static int isdigit_str9(const char *str)
 	while (--maxlen && isdigit(*str))
 		str++;
 	return (*str == '\0');
+}
+
+static const char *var_end(const char *var)
+{
+	while (*var)
+		if (*var++ == '=')
+			break;
+	return var;
 }
 
 
@@ -1038,7 +1044,7 @@ struct strpush {
 struct parsefile {
 	struct parsefile *prev; /* preceding file on stack */
 	int linno;              /* current line */
-	int fd;                 /* file descriptor (or -1 if string) */
+	int pf_fd;              /* file descriptor (or -1 if string) */
 	int left_in_line;       /* number of chars left in this line */
 	int left_in_buffer;     /* number of chars left in this buffer past the line */
 	char *next_to_pgetc;    /* next char in buffer */
@@ -1064,7 +1070,7 @@ ash_vmsg(const char *msg, va_list ap)
 	if (commandname) {
 		if (strcmp(arg0, commandname))
 			fprintf(stderr, "%s: ", commandname);
-		if (!iflag || g_parsefile->fd)
+		if (!iflag || g_parsefile->pf_fd > 0)
 			fprintf(stderr, "line %d: ", startlinno);
 	}
 	vfprintf(stderr, msg, ap);
@@ -1712,8 +1718,8 @@ static void FAST_FUNC getoptsreset(const char *value);
 struct var {
 	struct var *next;               /* next entry in hash list */
 	int flags;                      /* flags are defined above */
-	const char *text;               /* name=value */
-	void (*func)(const char *) FAST_FUNC; /* function to be called when  */
+	const char *var_text;           /* name=value */
+	void (*var_func)(const char *) FAST_FUNC; /* function to be called when  */
 					/* the variable gets set/unset */
 };
 
@@ -1767,13 +1773,13 @@ static void change_random(const char *) FAST_FUNC;
 
 static const struct {
 	int flags;
-	const char *text;
-	void (*func)(const char *) FAST_FUNC;
+	const char *var_text;
+	void (*var_func)(const char *) FAST_FUNC;
 } varinit_data[] = {
 	{ VSTRFIXED|VTEXTFIXED       , defifsvar   , NULL            },
 #if ENABLE_ASH_MAIL
-	{ VSTRFIXED|VTEXTFIXED|VUNSET, "MAIL\0"    , changemail      },
-	{ VSTRFIXED|VTEXTFIXED|VUNSET, "MAILPATH\0", changemail      },
+	{ VSTRFIXED|VTEXTFIXED|VUNSET, "MAIL"      , changemail      },
+	{ VSTRFIXED|VTEXTFIXED|VUNSET, "MAILPATH"  , changemail      },
 #endif
 	{ VSTRFIXED|VTEXTFIXED       , bb_PATH_root_path, changepath },
 	{ VSTRFIXED|VTEXTFIXED       , "PS1=$ "    , NULL            },
@@ -1783,14 +1789,14 @@ static const struct {
 	{ VSTRFIXED|VTEXTFIXED       , "OPTIND=1"  , getoptsreset    },
 #endif
 #if ENABLE_ASH_RANDOM_SUPPORT
-	{ VSTRFIXED|VTEXTFIXED|VUNSET|VDYNAMIC, "RANDOM\0", change_random },
+	{ VSTRFIXED|VTEXTFIXED|VUNSET|VDYNAMIC, "RANDOM", change_random },
 #endif
 #if ENABLE_LOCALE_SUPPORT
-	{ VSTRFIXED|VTEXTFIXED|VUNSET, "LC_ALL\0"  , change_lc_all   },
-	{ VSTRFIXED|VTEXTFIXED|VUNSET, "LC_CTYPE\0", change_lc_ctype },
+	{ VSTRFIXED|VTEXTFIXED|VUNSET, "LC_ALL"    , change_lc_all   },
+	{ VSTRFIXED|VTEXTFIXED|VUNSET, "LC_CTYPE"  , change_lc_ctype },
 #endif
 #if ENABLE_FEATURE_EDITING_SAVEHISTORY
-	{ VSTRFIXED|VTEXTFIXED|VUNSET, "HISTFILE\0", NULL            },
+	{ VSTRFIXED|VTEXTFIXED|VUNSET, "HISTFILE"  , NULL            },
 #endif
 };
 
@@ -1817,9 +1823,9 @@ extern struct globals_var *const ash_ptr_to_globals_var;
 	(*(struct globals_var**)&ash_ptr_to_globals_var) = xzalloc(sizeof(G_var)); \
 	barrier(); \
 	for (i = 0; i < ARRAY_SIZE(varinit_data); i++) { \
-		varinit[i].flags = varinit_data[i].flags; \
-		varinit[i].text  = varinit_data[i].text; \
-		varinit[i].func  = varinit_data[i].func; \
+		varinit[i].flags    = varinit_data[i].flags; \
+		varinit[i].var_text = varinit_data[i].var_text; \
+		varinit[i].var_func = varinit_data[i].var_func; \
 	} \
 } while (0)
 
@@ -1850,19 +1856,19 @@ extern struct globals_var *const ash_ptr_to_globals_var;
  * They have to skip over the name.  They return the null string
  * for unset variables.
  */
-#define ifsval()        (vifs.text + 4)
+#define ifsval()        (vifs.var_text + 4)
 #define ifsset()        ((vifs.flags & VUNSET) == 0)
 #if ENABLE_ASH_MAIL
-# define mailval()      (vmail.text + 5)
-# define mpathval()     (vmpath.text + 9)
+# define mailval()      (vmail.var_text + 5)
+# define mpathval()     (vmpath.var_text + 9)
 # define mpathset()     ((vmpath.flags & VUNSET) == 0)
 #endif
-#define pathval()       (vpath.text + 5)
-#define ps1val()        (vps1.text + 4)
-#define ps2val()        (vps2.text + 4)
-#define ps4val()        (vps4.text + 4)
+#define pathval()       (vpath.var_text + 5)
+#define ps1val()        (vps1.var_text + 4)
+#define ps2val()        (vps2.var_text + 4)
+#define ps4val()        (vps4.var_text + 4)
 #if ENABLE_ASH_GETOPTS
-# define optindval()    (voptind.text + 7)
+# define optindval()    (voptind.var_text + 7)
 #endif
 
 
@@ -1921,12 +1927,6 @@ varcmp(const char *p, const char *q)
 	return c - d;
 }
 
-static int
-varequal(const char *a, const char *b)
-{
-	return !varcmp(a, b);
-}
-
 /*
  * Find the appropriate entry in the hash table from the name.
  */
@@ -1961,15 +1961,15 @@ initvar(void)
 	 * PS1 depends on uid
 	 */
 #if ENABLE_FEATURE_EDITING && ENABLE_FEATURE_EDITING_FANCY_PROMPT
-	vps1.text = "PS1=\\w \\$ ";
+	vps1.var_text = "PS1=\\w \\$ ";
 #else
 	if (!geteuid())
-		vps1.text = "PS1=# ";
+		vps1.var_text = "PS1=# ";
 #endif
 	vp = varinit;
 	end = vp + ARRAY_SIZE(varinit);
 	do {
-		vpp = hashvar(vp->text);
+		vpp = hashvar(vp->var_text);
 		vp->next = *vpp;
 		*vpp = vp;
 	} while (++vp < end);
@@ -1979,7 +1979,7 @@ static struct var **
 findvar(struct var **vpp, const char *name)
 {
 	for (; *vpp; vpp = &(*vpp)->next) {
-		if (varequal((*vpp)->text, name)) {
+		if (varcmp((*vpp)->var_text, name) == 0) {
 			break;
 		}
 	}
@@ -2003,11 +2003,11 @@ lookupvar(const char *name)
 	 * As soon as they're unset, they're no longer dynamic, and dynamic
 	 * lookup will no longer happen at that point. -- PFM.
 	 */
-		if ((v->flags & VDYNAMIC))
-			(*v->func)(NULL);
+		if (v->flags & VDYNAMIC)
+			v->var_func(NULL);
 #endif
 		if (!(v->flags & VUNSET))
-			return strchrnul(v->text, '=') + 1;
+			return var_end(v->var_text);
 	}
 	return NULL;
 }
@@ -2021,8 +2021,8 @@ bltinlookup(const char *name)
 	struct strlist *sp;
 
 	for (sp = cmdenviron; sp; sp = sp->next) {
-		if (varequal(sp->text, name))
-			return strchrnul(sp->text, '=') + 1;
+		if (varcmp(sp->text, name) == 0)
+			return var_end(sp->text);
 	}
 	return lookupvar(name);
 }
@@ -2048,24 +2048,24 @@ setvareq(char *s, int flags)
 
 			if (flags & VNOSAVE)
 				free(s);
-			n = vp->text;
+			n = vp->var_text;
 			ash_msg_and_raise_error("%.*s: is read only", strchrnul(n, '=') - n, n);
 		}
 
 		if (flags & VNOSET)
 			return;
 
-		if (vp->func && (flags & VNOFUNC) == 0)
-			(*vp->func)(strchrnul(s, '=') + 1);
+		if (vp->var_func && !(flags & VNOFUNC))
+			vp->var_func(var_end(s));
 
-		if ((vp->flags & (VTEXTFIXED|VSTACK)) == 0)
-			free((char*)vp->text);
+		if (!(vp->flags & (VTEXTFIXED|VSTACK)))
+			free((char*)vp->var_text);
 
 		flags |= vp->flags & ~(VTEXTFIXED|VSTACK|VNOSAVE|VUNSET);
 	} else {
+		/* variable s is not found */
 		if (flags & VNOSET)
 			return;
-		/* not found */
 		vp = ckzalloc(sizeof(*vp));
 		vp->next = *vpp;
 		/*vp->func = NULL; - ckzalloc did it */
@@ -2073,7 +2073,7 @@ setvareq(char *s, int flags)
 	}
 	if (!(flags & (VTEXTFIXED|VSTACK|VNOSAVE)))
 		s = ckstrdup(s);
-	vp->text = s;
+	vp->var_text = s;
 	vp->flags = flags;
 }
 
@@ -2171,7 +2171,7 @@ unsetvar(const char *s)
 		if ((flags & VSTRFIXED) == 0) {
 			INT_OFF;
 			if ((flags & (VTEXTFIXED|VSTACK)) == 0)
-				free((char*)vp->text);
+				free((char*)vp->var_text);
 			*vpp = vp->next;
 			free(vp);
 			INT_ON;
@@ -2223,7 +2223,7 @@ listvars(int on, int off, char ***end)
 			if ((vp->flags & mask) == on) {
 				if (ep == stackstrend())
 					ep = growstackstr();
-				*ep++ = (char *) vp->text;
+				*ep++ = (char*)vp->var_text;
 			}
 		}
 	} while (++vpp < vartab + VTABSIZE);
@@ -2518,7 +2518,7 @@ cdcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 	flags = cdopt();
 	dest = *argptr;
 	if (!dest)
-		dest = bltinlookup(homestr);
+		dest = bltinlookup("HOME");
 	else if (LONE_DASH(dest)) {
 		dest = bltinlookup("OLDPWD");
 		flags |= CD_PRINT;
@@ -2565,7 +2565,7 @@ cdcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 	/* NOTREACHED */
  out:
 	if (flags & CD_PRINT)
-		out1fmt(snlfmt, curdir);
+		out1fmt("%s\n", curdir);
 	return 0;
 }
 
@@ -2581,7 +2581,7 @@ pwdcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 			setpwd(dir, 0);
 		dir = physdir;
 	}
-	out1fmt(snlfmt, dir);
+	out1fmt("%s\n", dir);
 	return 0;
 }
 
@@ -5063,15 +5063,26 @@ static int is_hidden_fd(struct redirtab *rp, int fd)
 
 	if (fd == -1)
 		return 0;
+	/* Check open scripts' fds */
 	pf = g_parsefile;
 	while (pf) {
-		if (fd == pf->fd) {
+		/* We skip pf_fd == 0 case because of the following case:
+		 * $ ash  # running ash interactively
+		 * $ . ./script.sh
+		 * and in script.sh: "exec 9>&0".
+		 * Even though top-level pf_fd _is_ 0,
+		 * it's still ok to use it: "read" builtin uses it,
+		 * why should we cripple "exec" builtin?
+		 */
+		if (pf->pf_fd > 0 && fd == pf->pf_fd) {
 			return 1;
 		}
 		pf = pf->prev;
 	}
+
 	if (!rp)
 		return 0;
+	/* Check saved fds of redirects */
 	fd |= COPYFD_RESTORE;
 	for (i = 0; i < rp->pair_count; i++) {
 		if (rp->two_fd[i].copy == fd) {
@@ -5084,9 +5095,7 @@ static int is_hidden_fd(struct redirtab *rp, int fd)
 /*
  * Process a list of redirection commands.  If the REDIR_PUSH flag is set,
  * old file descriptors are stashed away so that the redirection can be
- * undone by calling popredir.  If the REDIR_BACKQ flag is set, then the
- * standard output, and the standard error if it becomes a duplicate of
- * stdout, is saved in memory.
+ * undone by calling popredir.
  */
 /* flags passed to redirect */
 #define REDIR_PUSH    01        /* save previous values of file descriptors */
@@ -5132,13 +5141,15 @@ redirect(union node *redir, int flags)
 	}
 
 	do {
+		int right_fd = -1;
 		fd = redir->nfile.fd;
 		if (redir->nfile.type == NTOFD || redir->nfile.type == NFROMFD) {
-			int right_fd = redir->ndup.dupfd;
+			right_fd = redir->ndup.dupfd;
+			//bb_error_msg("doing %d > %d", fd, right_fd);
 			/* redirect from/to same file descriptor? */
 			if (right_fd == fd)
 				continue;
-			/* echo >&10 and 10 is a fd opened to the sh script? */
+			/* "echo >&10" and 10 is a fd opened to a sh script? */
 			if (is_hidden_fd(sv, right_fd)) {
 				errno = EBADF; /* as if it is closed */
 				ash_msg_and_raise_error("%d: %m", right_fd);
@@ -5160,7 +5171,10 @@ redirect(union node *redir, int flags)
 #endif
 		if (need_to_remember(sv, fd)) {
 			/* Copy old descriptor */
-			i = fcntl(fd, F_DUPFD, 10);
+			/* Careful to not accidentally "save"
+			 * to the same fd as right side fd in N>&M */
+			int minfd = right_fd < 10 ? 10 : right_fd + 1;
+			i = fcntl(fd, F_DUPFD, minfd);
 /* You'd expect copy to be CLOEXECed. Currently these extra "saved" fds
  * are closed in popredir() in the child, preventing them from leaking
  * into child. (popredir() also cleans up the mess in case of failures)
@@ -5623,7 +5637,7 @@ exptilde(char *startp, char *p, int flags)
  done:
 	*p = '\0';
 	if (*name == '\0') {
-		home = lookupvar(homestr);
+		home = lookupvar("HOME");
 	} else {
 		pw = getpwnam(name);
 		if (pw == NULL)
@@ -6591,7 +6605,7 @@ evalvar(char *p, int flags, struct strlist *var_str_list)
 	var = p;
 	easy = (!quoted || (*var == '@' && shellparam.nparam));
 	startloc = expdest - (char *)stackblock();
-	p = strchr(p, '=') + 1;
+	p = strchr(p, '=') + 1; //TODO: use var_end(p)?
 
  again:
 	varlen = varvalue(var, varflags, flags, var_str_list);
@@ -8637,14 +8651,14 @@ poplocalvars(void)
 			free((char*)lvp->text);
 			optschanged();
 		} else if ((lvp->flags & (VUNSET|VSTRFIXED)) == VUNSET) {
-			unsetvar(vp->text);
+			unsetvar(vp->var_text);
 		} else {
-			if (vp->func)
-				(*vp->func)(strchrnul(lvp->text, '=') + 1);
+			if (vp->var_func)
+				vp->var_func(var_end(lvp->text));
 			if ((vp->flags & (VTEXTFIXED|VSTACK)) == 0)
-				free((char*)vp->text);
+				free((char*)vp->var_text);
 			vp->flags = lvp->flags;
-			vp->text = lvp->text;
+			vp->var_text = lvp->text;
 		}
 		free(lvp);
 	}
@@ -8763,7 +8777,7 @@ mklocal(char *name)
 			vp = *vpp;      /* the new variable */
 			lvp->flags = VUNSET;
 		} else {
-			lvp->text = vp->text;
+			lvp->text = vp->var_text;
 			lvp->flags = vp->flags;
 			vp->flags |= VSTRFIXED|VTEXTFIXED;
 			if (eq)
@@ -9073,7 +9087,7 @@ evalcommand(union node *cmd, int flags)
 	expredir(cmd->ncmd.redirect);
 	status = redirectsafe(cmd->ncmd.redirect, REDIR_PUSH | REDIR_SAVEFD2);
 
-	path = vpath.text;
+	path = vpath.var_text;
 	for (argp = cmd->ncmd.assign; argp; argp = argp->narg.next) {
 		struct strlist **spp;
 		char *p;
@@ -9086,7 +9100,7 @@ evalcommand(union node *cmd, int flags)
 		 * is present
 		 */
 		p = (*spp)->text;
-		if (varequal(p, path))
+		if (varcmp(p, path) == 0)
 			path = p;
 	}
 
@@ -9442,8 +9456,8 @@ preadfd(void)
 	g_parsefile->next_to_pgetc = buf;
 #if ENABLE_FEATURE_EDITING
  retry:
-	if (!iflag || g_parsefile->fd != STDIN_FILENO)
-		nr = nonblock_safe_read(g_parsefile->fd, buf, IBUFSIZ - 1);
+	if (!iflag || g_parsefile->pf_fd != STDIN_FILENO)
+		nr = nonblock_safe_read(g_parsefile->pf_fd, buf, IBUFSIZ - 1);
 	else {
 #if ENABLE_FEATURE_TAB_COMPLETION
 		line_input_state->path_lookup = pathval();
@@ -9465,7 +9479,7 @@ preadfd(void)
 		}
 	}
 #else
-	nr = nonblock_safe_read(g_parsefile->fd, buf, IBUFSIZ - 1);
+	nr = nonblock_safe_read(g_parsefile->pf_fd, buf, IBUFSIZ - 1);
 #endif
 
 #if 0
@@ -9692,7 +9706,7 @@ pushfile(void)
 
 	pf = ckzalloc(sizeof(*pf));
 	pf->prev = g_parsefile;
-	pf->fd = -1;
+	pf->pf_fd = -1;
 	/*pf->strpush = NULL; - ckzalloc did it */
 	/*pf->basestrpush.prev = NULL;*/
 	g_parsefile = pf;
@@ -9704,8 +9718,8 @@ popfile(void)
 	struct parsefile *pf = g_parsefile;
 
 	INT_OFF;
-	if (pf->fd >= 0)
-		close(pf->fd);
+	if (pf->pf_fd >= 0)
+		close(pf->pf_fd);
 	free(pf->buf);
 	while (pf->strpush)
 		popstring();
@@ -9732,9 +9746,9 @@ static void
 closescript(void)
 {
 	popallfiles();
-	if (g_parsefile->fd > 0) {
-		close(g_parsefile->fd);
-		g_parsefile->fd = 0;
+	if (g_parsefile->pf_fd > 0) {
+		close(g_parsefile->pf_fd);
+		g_parsefile->pf_fd = 0;
 	}
 }
 
@@ -9750,7 +9764,7 @@ setinputfd(int fd, int push)
 		pushfile();
 		g_parsefile->buf = NULL;
 	}
-	g_parsefile->fd = fd;
+	g_parsefile->pf_fd = fd;
 	if (g_parsefile->buf == NULL)
 		g_parsefile->buf = ckmalloc(IBUFSIZ);
 	g_parsefile->left_in_buffer = 0;
@@ -9855,7 +9869,7 @@ chkmail(void)
 		}
 		if (!mail_var_path_changed && statb.st_mtime != *mtp) {
 			fprintf(
-				stderr, snlfmt,
+				stderr, "%s\n",
 				pathopt ? pathopt : "you have mail"
 			);
 		}
@@ -10113,7 +10127,7 @@ change_random(const char *value)
 		/* "get", generate */
 		t = next_random(&random_gen);
 		/* set without recursion */
-		setvar(vrandom.text, utoa(t), VNOFUNC);
+		setvar(vrandom.var_text, utoa(t), VNOFUNC);
 		vrandom.flags &= ~VNOFUNC;
 	} else {
 		/* set/reset */
@@ -12994,8 +13008,9 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 		 * Ensure we don't falsely claim that 0 (stdin)
 		 * is one of stacked source fds.
 		 * Testcase: ash -c 'exec 1>&0' must not complain. */
-		if (!sflag)
-			g_parsefile->fd = -1;
+		// if (!sflag) g_parsefile->pf_fd = -1;
+		// ^^ not necessary since now we special-case fd 0
+		// in is_hidden_fd() to not be considered "hidden fd"
 		evalstring(minusc, 0);
 	}
 

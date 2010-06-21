@@ -592,6 +592,8 @@ char *strncpy_IFNAMSIZ(char *dst, const char *src) FAST_FUNC;
 /* Guaranteed to NOT be a macro (smallest code). Saves nearly 2k on uclibc.
  * But potentially slow, don't use in one-billion-times loops */
 int bb_putchar(int ch) FAST_FUNC;
+/* Note: does not use stdio, writes to fd 2 directly */
+int bb_putchar_stderr(char ch) FAST_FUNC;
 char *xasprintf(const char *format, ...) __attribute__ ((format(printf, 1, 2))) FAST_FUNC RETURNS_MALLOC;
 // gcc-4.1.1 still isn't good enough at optimizing it
 // (+200 bytes compared to macro)
@@ -672,6 +674,8 @@ extern ssize_t safe_write(int fd, const void *buf, size_t count) FAST_FUNC;
 extern ssize_t full_write(int fd, const void *buf, size_t count) FAST_FUNC;
 extern void xwrite(int fd, const void *buf, size_t count) FAST_FUNC;
 extern void xwrite_str(int fd, const char *str) FAST_FUNC;
+extern ssize_t full_write1_str(const char *str) FAST_FUNC;
+extern ssize_t full_write2_str(const char *str) FAST_FUNC;
 extern void xopen_xwrite_close(const char* file, const char *str) FAST_FUNC;
 
 /* Close fd, but check for failures (some types of write errors) */

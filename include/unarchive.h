@@ -4,6 +4,22 @@
 
 PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN
 
+enum {
+#if BB_BIG_ENDIAN
+	COMPRESS_MAGIC = 0x1f9d,
+	GZIP_MAGIC = 0x1f8b,
+	BZIP2_MAGIC = ('B'<<8) + 'Z',
+	XZ_MAGIC1 = (0xfd<<8) + '7',
+	XZ_MAGIC2 = ((((('z'<<8) + 'X')<<8) + 'Z')<<8) + 0,
+#else
+	COMPRESS_MAGIC = 0x9d1f,
+	GZIP_MAGIC = 0x8b1f,
+	BZIP2_MAGIC = ('Z'<<8) + 'B',
+	XZ_MAGIC1 = ('7'<<8) + 0xfd,
+	XZ_MAGIC2 = (((((0<<8) + 'Z')<<8) + 'X')<<8) + 'z',
+#endif
+};
+
 typedef struct file_header_t {
 	char *name;
 	char *link_target;
@@ -155,9 +171,12 @@ IF_DESKTOP(long long) int unpack_Z_stream(int src_fd, int dst_fd) FAST_FUNC;
 /* wrapper which checks first two bytes to be "BZ" */
 IF_DESKTOP(long long) int unpack_bz2_stream_prime(int src_fd, int dst_fd) FAST_FUNC;
 
+char* append_ext(char *filename, const char *expected_ext) FAST_FUNC;
 int bbunpack(char **argv,
-	     char* (*make_new_name)(char *filename),
-	     IF_DESKTOP(long long) int (*unpacker)(unpack_info_t *info)) FAST_FUNC;
+	    IF_DESKTOP(long long) int FAST_FUNC (*unpacker)(unpack_info_t *info),
+	    char* FAST_FUNC (*make_new_name)(char *filename, const char *expected_ext),
+	    const char *expected_ext
+) FAST_FUNC;
 
 #if BB_MMU
 void open_transformer(int fd,
