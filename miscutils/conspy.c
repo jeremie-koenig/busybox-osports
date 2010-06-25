@@ -9,9 +9,9 @@
  *
  * Licensed under GPLv2 or later, see file License in this tarball for details.
  *
- * example :	conspy num		shared access to console num
- * or		conspy -d num		screenshot of console num
- * or		conspy -cs num		poor man's GNU screen like
+ * example:     conspy num              shared access to console num
+ * or           conspy -d num           screenshot of console num
+ * or           conspy -cs num          poor man's GNU screen like
  */
 
 //applet:IF_CONSPY(APPLET(conspy, _BB_DIR_BIN, _BB_SUID_DROP))
@@ -29,7 +29,7 @@
 //config:	  or        conspy -cs num  poor man's GNU screen like
 
 //usage:#define conspy_trivial_usage
-//usage:     "[-vcsndf] [-x ROW] [-y LINE] [CONSOLE_NO]"
+//usage:	"[-vcsndf] [-x ROW] [-y LINE] [CONSOLE_NO]"
 //usage:#define conspy_full_usage "\n\n"
 //usage:     "A text-mode VNC like program for Linux virtual consoles."
 //usage:     "\nTo exit, quickly press ESC 3 times."
@@ -51,10 +51,10 @@ struct screen_info {
 	unsigned char lines, rows, cursor_x, cursor_y;
 };
 
-#define CHAR(x) ((x)[0])
-#define ATTR(x) ((x)[1])
+#define CHAR(x) ((uint8_t)((x)[0]))
+#define ATTR(x) ((uint8_t)((x)[1]))
 #define NEXT(x) ((x)+=2)
-#define DATA(x) (* (short *) (x))
+#define DATA(x) (*(uint16_t*)(x))
 
 struct globals {
 	char* data;
@@ -63,7 +63,13 @@ struct globals {
 	int kbd_fd;
 	unsigned width;
 	unsigned height;
-	char last_attr;
+	uint8_t last_attr;
+	int ioerror_count;
+	int key_count;
+	int escape_count;
+	int nokeys;
+	int current;
+	int vcsa_fd;
 	struct screen_info info;
 	struct termios term_orig;
 };
@@ -84,11 +90,12 @@ enum {
 #define FLAG(x) (1 << FLAG_##x)
 #define BW (option_mask32 & FLAG(n))
 
-static void screen_read_close(int fd, char *data)
+static void screen_read_close(void)
 {
 	unsigned i, j;
+	char *data = G.data + G.current;
 
-	xread(fd, data, G.size);
+	xread(G.vcsa_fd, data, G.size);
 	G.last_attr = 0;
 	for (i = 0; i < G.info.lines; i++) {
 		for (j = 0; j < G.info.rows; j++, NEXT(data)) {
@@ -96,31 +103,64 @@ static void screen_read_close(int fd, char *data)
 			unsigned y = i - G.y; // if will catch i < G.y too
 
 			if (CHAR(data) < ' ')
-				CHAR(data) = ' ';
+				*data = ' '; // CHAR(data) = ' ';
 			if (y >= G.height || x >= G.width)
 				DATA(data) = 0;
 		}
 	}
-	close(fd);
+	close(G.vcsa_fd);
 }
 
 static void screen_char(char *data)
 {
-	if (!BW && G.last_attr != ATTR(data)) {
-		//                            BLGCRMOW
+	uint8_t attr = ATTR(data);
+
+	if (!BW && G.last_attr != attr) {
+// Attribute layout for VGA compatible text videobuffer:
+// blinking text
+// |red bkgd
+// ||green bkgd
+// |||blue bkgd
+// vvvv
+// 00000000 <- lsb bit on the right
+//     bold text / text 8th bit
+//      red text
+//       green text
+//        blue text
+// TODO: apparently framebuffer-based console uses different layout
+// (bug? attempt to get 8th text bit in better position?)
+// red bkgd
+// |green bkgd
+// ||blue bkgd
+// vvv
+// 00000000 <- lsb bit on the right
+//    bold text
+//     red text
+//      green text
+//       blue text
+//        text 8th bit
+		// converting RGB color bit triad to BGR:
 		static const char color[8] = "04261537";
 
+		G.last_attr = attr;
 		printf("\033[%c;4%c;3%cm",
-			(ATTR(data) & 8) ? '1'  // bold
-					 : '0', // defaults
-			color[(ATTR(data) >> 4) & 7], color[ATTR(data) & 7]);
-		G.last_attr = ATTR(data);
+			(attr & 8) ? '1' : '0', // bold text / reset all
+			color[(attr >> 4) & 7], // bkgd color
+			color[attr & 7] // text color
+		);
 	}
-	bb_putchar(CHAR(data));
+	putchar(CHAR(data));
 }
 
-#define clrscr()  printf("\033[1;1H" "\033[0J")
-#define curoff()  printf("\033[?25l")
+static void clrscr(void)
+{
+	printf("\033[1;1H" "\033[0J");
+}
+
+static void curoff(void)
+{
+	printf("\033[?25l");
+}
 
 static void curon(void)
 {
@@ -132,13 +172,13 @@ static void gotoxy(int row, int line)
 	printf("\033[%u;%uH", line + 1, row + 1);
 }
 
-static void screen_dump(char *data)
+static void screen_dump(void)
 {
 	int linefeed_cnt;
 	int line, row;
 	int linecnt = G.info.lines - G.y;
+	char *data = G.data + G.current + (2 * G.y * G.info.rows);
 
-	data += 2 * G.y * G.info.rows;
 	linefeed_cnt = 0;
 	for (line = 0; line < linecnt && line < G.height; line++) {
 		int space_cnt = 0;
@@ -148,10 +188,10 @@ static void screen_dump(char *data)
 			if (tty_row >= G.width)
 				continue;
 			space_cnt++;
-			if (BW && (CHAR(data) | ' ') == ' ')
+			if (BW && CHAR(data) == ' ')
 				continue;
 			while (linefeed_cnt != 0) {
-				bb_putchar('\r');
+				//bb_putchar('\r'); - tty driver does it for us
 				bb_putchar('\n');
 				linefeed_cnt--;
 			}
@@ -197,13 +237,12 @@ static void cleanup(int code)
 
 static void get_initial_data(const char* vcsa_name)
 {
-	int size;
-	int fd = xopen(vcsa_name, O_RDONLY);
-	xread(fd, &G.info, 4);
-	G.size = size = G.info.rows * G.info.lines * 2;
+	G.vcsa_fd = xopen(vcsa_name, O_RDONLY);
+	xread(G.vcsa_fd, &G.info, 4);
+	G.size = G.info.rows * G.info.lines * 2;
 	G.width = G.height = UINT_MAX;
-	G.data = xzalloc(2 * size);
-	screen_read_close(fd, G.data);
+	G.data = xzalloc(2 * G.size);
+	screen_read_close();
 }
 
 static void create_cdev_if_doesnt_exist(const char* name, dev_t dev)
@@ -248,22 +287,16 @@ static NOINLINE void start_shell_in_child(const char* tty_name)
 	}
 }
 
-int conspy_main(int argc UNUSED_PARAM, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int conspy_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int conspy_main(int argc UNUSED_PARAM, char **argv)
 {
-	char *buffer[2];
-	char vcsa_name[sizeof("/dev/vcsa") + 2];
-	char tty_name[sizeof("/dev/tty") + 2];
+	char vcsa_name[sizeof("/dev/vcsaNN")];
+	char tty_name[sizeof("/dev/ttyNN")];
 #define keybuf bb_common_bufsiz1
 	struct termios termbuf;
 	unsigned opts;
 	unsigned ttynum;
 	int poll_timeout_ms;
-	int current;
-	int ioerror_count;
-	int key_count;
-	int escape_count;
-	int nokeys;
 #if ENABLE_LONG_OPTS
 	static const char getopt_longopts[] ALIGN1 =
 		"viewonly\0"     No_argument "v"
@@ -277,7 +310,6 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 	applet_long_options = getopt_longopts;
 #endif
 	INIT_G();
-	strcpy(vcsa_name, "/dev/vcsa");
 
 	opt_complementary = "x+:y+"; // numeric params
 	opts = getopt32(argv, "vcsndfx:y:", &G.x, &G.y);
@@ -285,8 +317,8 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 	ttynum = 0;
 	if (argv[0]) {
 		ttynum = xatou_range(argv[0], 0, 63);
-		sprintf(vcsa_name + sizeof("/dev/vcsa")-1, "%u", ttynum);
 	}
+	sprintf(vcsa_name, "/dev/vcsa%u", ttynum);
 	sprintf(tty_name, "%s%u", "/dev/tty", ttynum);
 	if (opts & FLAG(c)) {
 		if ((opts & (FLAG(s)|FLAG(v))) != FLAG(v))
@@ -300,7 +332,7 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 	get_initial_data(vcsa_name);
 	G.kbd_fd = xopen(CURRENT_TTY, O_RDONLY);
 	if (opts & FLAG(d)) {
-		screen_dump(G.data);
+		screen_dump();
 		bb_putchar('\n');
 		if (ENABLE_FEATURE_CLEAN_UP) {
 			free(ptr_to_globals);
@@ -314,28 +346,26 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 	tcgetattr(G.kbd_fd, &G.term_orig);
 	termbuf = G.term_orig;
 	termbuf.c_iflag &= ~(BRKINT|INLCR|ICRNL|IXON|IXOFF|IUCLC|IXANY|IMAXBEL);
-	termbuf.c_oflag &= ~(OPOST);
+	//termbuf.c_oflag &= ~(OPOST); - no, we still want \n -> \r\n
 	termbuf.c_lflag &= ~(ISIG|ICANON|ECHO);
 	termbuf.c_cc[VMIN] = 1;
 	termbuf.c_cc[VTIME] = 0;
 	tcsetattr(G.kbd_fd, TCSANOW, &termbuf);
-	buffer[0] = G.data;
-	buffer[1] = G.data + G.size;
 	poll_timeout_ms = 250;
-	ioerror_count = key_count = escape_count = nokeys = current = 0;
 	while (1) {
 		struct pollfd pfd;
-		int vcsa_handle;
 		int bytes_read;
 		int i, j;
-		int next = 1 - current;
-		char *data = buffer[next];
-		char *old  = buffer[current];
+		char *data, *old;
+
+		old = G.data + G.current;
+		G.current = G.size - G.current;
+		data = G.data + G.current;
 
 		// Close & re-open vcsa in case they have
 		// swapped virtual consoles
-		vcsa_handle = xopen(vcsa_name, O_RDONLY);
-		xread(vcsa_handle, &G.info, 4);
+		G.vcsa_fd = xopen(vcsa_name, O_RDONLY);
+		xread(G.vcsa_fd, &G.info, 4);
 		if (G.size != (G.info.rows * G.info.lines * 2)) {
 			cleanup(1);
 		}
@@ -365,10 +395,10 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 		}
 
 		// Scan console data and redraw our tty where needed
-		screen_read_close(vcsa_handle, data);
+		screen_read_close();
 		if (i != G.width || j != G.height) {
 			clrscr();
-			screen_dump(data);
+			screen_dump();
 		}
 		else for (i = 0; i < G.info.lines; i++) {
 			char *last = last;
@@ -400,7 +430,6 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 			for (; first < last; NEXT(first))
 				screen_char(first);
 		}
-		current = next;
 		curmove();
 
 		// Wait for local user keypresses
@@ -408,26 +437,27 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 		pfd.events = POLLIN;
 		bytes_read = 0;
 		switch (poll(&pfd, 1, poll_timeout_ms)) {
+			char *k;
 		case -1:
 			if (errno != EINTR)
 				cleanup(1);
 			break;
 		case 0:
-			if (++nokeys >= 4)
-				nokeys = escape_count = 0;
+			if (++G.nokeys >= 4)
+				G.nokeys = G.escape_count = 0;
 			break;
 		default:
 			// Read the keys pressed
-			bytes_read = read(G.kbd_fd, keybuf + key_count,
-					sizeof(keybuf) - key_count);
+			k = keybuf + G.key_count;
+			bytes_read = read(G.kbd_fd, k, sizeof(keybuf) - G.key_count);
 			if (bytes_read < 0)
 				cleanup(1);
 
 			// Do exit processing
 			for (i = 0; i < bytes_read; i++) {
-				if (keybuf[key_count + i] != '\033')
-					escape_count = 0;
-				else if (++escape_count >= 3)
+				if (k[i] != '\033')
+					G.escape_count = 0;
+				else if (++G.escape_count >= 3)
 					cleanup(0);
 			}
 		}
@@ -437,23 +467,23 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 		// buffer.  Don't do this if the virtual console is in scan
 		// code mode - giving ASCII characters to a program expecting
 		// scan codes will confuse it.
-		if (!(option_mask32 & FLAG(v)) && escape_count == 0) {
+		if (!(option_mask32 & FLAG(v)) && G.escape_count == 0) {
 			int handle, result;
 			long kbd_mode;
 
-			key_count += bytes_read;
+			G.key_count += bytes_read;
 			handle = xopen(tty_name, O_WRONLY);
 			result = ioctl(handle, KDGKBMODE, &kbd_mode);
 			if (result == -1)
 				/* nothing */;
 			else if (kbd_mode != K_XLATE && kbd_mode != K_UNICODE)
-				key_count = 0; // scan code mode
+				G.key_count = 0; // scan code mode
 			else {
-				for (i = 0; i < key_count && result != -1; i++)
+				for (i = 0; i < G.key_count && result != -1; i++)
 					result = ioctl(handle, TIOCSTI, keybuf + i);
-				key_count -= i;
-				if (key_count)
-					memmove(keybuf, keybuf + i, key_count);
+				G.key_count -= i;
+				if (G.key_count)
+					memmove(keybuf, keybuf + i, G.key_count);
 				// If there is an application on console which reacts
 				// to keypresses, we need to make our first sleep
 				// shorter to quickly redraw whatever it printed there.
@@ -466,8 +496,8 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 			// We sometimes get spurious IO errors on the TTY
 			// as programs close and re-open it
 			if (result != -1)
-				ioerror_count = 0;
-			else if (errno != EIO || ++ioerror_count > 4)
+				G.ioerror_count = 0;
+			else if (errno != EIO || ++G.ioerror_count > 4)
 				cleanup(1);
 		}
 	}
