@@ -8,8 +8,8 @@
  */
 
 #include "libbb.h"
+#include "xmount.h"
 #include <mntent.h>
-#include <sys/swap.h>
 
 #if ENABLE_FEATURE_MOUNT_LABEL
 # include "volume_id.h"
@@ -43,9 +43,9 @@ static int swap_enable_disable(char *device)
 #endif
 
 	if (applet_name[5] == 'n')
-		status = swapon(device, g_flags);
+		status = xswapon(device, g_flags);
 	else
-		status = swapoff(device);
+		status = xswapoff(device);
 
 	if (status != 0) {
 		bb_simple_perror_msg(device);

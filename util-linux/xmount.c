@@ -63,4 +63,14 @@ int FAST_FUNC xumount(const char *target, int flags)
 	return unmount(target, flags);
 }
 
+int FAST_FUNC xswapon(const char *path, int swapflags UNUSED_PARAM)
+{
+	return swapon(path);
+}
+
+int FAST_FUNC xswapoff(const char *path)
+{
+	return swapoff(path);
+}
+
 #endif

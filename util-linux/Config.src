@@ -639,7 +639,6 @@ config SETARCH
 config SWAPONOFF
 	bool "swaponoff"
 	default y
-	depends on PLATFORM_LINUX
 	help
 	  This option enables both the 'swapon' and the 'swapoff' utilities.
 	  Once you have created some swap space using 'mkswap', you also need
@@ -651,7 +650,7 @@ config SWAPONOFF
 config FEATURE_SWAPON_PRI
 	bool "Support priority option -p"
 	default y
-	depends on SWAPONOFF
+	depends on SWAPONOFF && PLATFORM_LINUX
 	help
 	  Enable support for setting swap device priority in swapon.
 

@@ -5,9 +5,9 @@
  * Copyright (C) 2010 by Jeremie Koenig <jk@jk.fr.eu.org>
  * Copyright (C) 2010 by Luca Favatella <slackydeb@gmail.com>
  *
- * The Linux prototypes for mount() and umount2() are used as a reference for
- * our xmount() and xumount(), which should be implemented as a compatibility
- * wrappers for non-Linux systems (see xmount.c).
+ * The Linux prototypes for mount(), umount2(), swapon() and swapoff()  are
+ * used as a reference for our versions of them. On non-Linux system those
+ * should be implemented as compatibility wrappers (see xmount.c).
  */
 
 /*
@@ -17,6 +17,7 @@
 
 #ifdef __linux__
 # include <sys/mount.h>
+# include <sys/swap.h>
 /* Make sure we have all the new mount flags we actually try to use
  * (grab more as needed from util-linux's mount/mount_constants.h). */
 # ifndef MS_DIRSYNC
@@ -56,6 +57,7 @@
 
 #elif defined(__FreeBSD_kernel__)
 # include <sys/mount.h>
+# include <sys/swap.h>
 # define MS_NOSUID      MNT_NOSUID
 # define MS_NODEV       0
 # define MS_NOEXEC      MNT_NOEXEC
@@ -82,16 +84,18 @@
 #endif
 
 /*
- * Prototypes for xmount() and xumount(): on Linux we use the system calls
- * directly, otherwise xmount() and xumount() should be implemented as
- * compatibility wrappers (see xmount.c).
+ * Prototypes for the compatibility wrappers
  */
 
 #ifdef __linux__
 # define xmount mount
 # define xumount umount2
+# define xswapon swapon
+# define xswapoff swapoff
 #else
 int xmount(const char *source, const char *target, const char *filesystemtype,
 		unsigned long mountflags, const void *data) FAST_FUNC;
 int xumount(const char *target, int flags) FAST_FUNC;
+int xswapon(const char *path, int swapflags) FAST_FUNC;
+int xswapoff(const char *path) FAST_FUNC;
 #endif
