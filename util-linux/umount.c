@@ -8,40 +8,9 @@
  * Licensed under GPL version 2, see file LICENSE in this tarball for details.
  */
 #include <mntent.h>
-#include <sys/mount.h>
-/* Make sure we have all the new mount flags we actually try to use. */
-#ifndef MS_BIND
-# define MS_BIND        (1 << 12)
-#endif
-#ifndef MS_MOVE
-# define MS_MOVE        (1 << 13)
-#endif
-#ifndef MS_RECURSIVE
-# define MS_RECURSIVE   (1 << 14)
-#endif
-#ifndef MS_SILENT
-# define MS_SILENT      (1 << 15)
-#endif
-/* The shared subtree stuff, which went in around 2.6.15. */
-#ifndef MS_UNBINDABLE
-# define MS_UNBINDABLE  (1 << 17)
-#endif
-#ifndef MS_PRIVATE
-# define MS_PRIVATE     (1 << 18)
-#endif
-#ifndef MS_SLAVE
-# define MS_SLAVE       (1 << 19)
-#endif
-#ifndef MS_SHARED
-# define MS_SHARED      (1 << 20)
-#endif
-#ifndef MS_RELATIME
-# define MS_RELATIME    (1 << 21)
-#endif
+
 #include "libbb.h"
-#ifndef PATH_MAX
-# define PATH_MAX (4*1024)
-#endif
+#include "xmount.h"
 
 
 #if defined(__dietlibc__)
@@ -154,11 +123,11 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
 		if (m) zapit = m->dir;
 
 		// Let's ask the thing nicely to unmount.
-		curstat = umount(zapit);
+		curstat = xumount(zapit, 0);
 
 		// Force the unmount, if necessary.
 		if (curstat && doForce)
-			curstat = umount2(zapit, doForce);
+			curstat = xumount(zapit, doForce);
 
 		// If still can't umount, maybe remount read-only?
 		if (curstat) {
@@ -166,7 +135,7 @@ int umount_main(int argc UNUSED_PARAM, char **argv)
 				// Note! Even if we succeed here, later we should not
 				// free loop device or erase mtab entry!
 				const char *msg = "%s busy - remounted read-only";
-				curstat = mount(m->device, zapit, NULL, MS_REMOUNT|MS_RDONLY, NULL);
+				curstat = xmount(m->device, zapit, NULL, MS_REMOUNT|MS_RDONLY, NULL);
 				if (curstat) {
 					msg = "can't remount %s read-only";
 					status = EXIT_FAILURE;

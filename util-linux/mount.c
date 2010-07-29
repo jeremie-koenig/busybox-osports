@@ -18,44 +18,9 @@
 //
 #include <mntent.h>
 #include <syslog.h>
-#include <sys/mount.h>
-// Grab more as needed from util-linux's mount/mount_constants.h
-#ifndef MS_DIRSYNC
-# define MS_DIRSYNC     (1 << 7) // Directory modifications are synchronous
-#endif
-#ifndef MS_UNION
-# define MS_UNION       (1 << 8)
-#endif
-#ifndef MS_BIND
-# define MS_BIND        (1 << 12)
-#endif
-#ifndef MS_MOVE
-# define MS_MOVE        (1 << 13)
-#endif
-#ifndef MS_RECURSIVE
-# define MS_RECURSIVE   (1 << 14)
-#endif
-#ifndef MS_SILENT
-# define MS_SILENT      (1 << 15)
-#endif
-// The shared subtree stuff, which went in around 2.6.15
-#ifndef MS_UNBINDABLE
-# define MS_UNBINDABLE  (1 << 17)
-#endif
-#ifndef MS_PRIVATE
-# define MS_PRIVATE     (1 << 18)
-#endif
-#ifndef MS_SLAVE
-# define MS_SLAVE       (1 << 19)
-#endif
-#ifndef MS_SHARED
-# define MS_SHARED      (1 << 20)
-#endif
-#ifndef MS_RELATIME
-# define MS_RELATIME    (1 << 21)
-#endif
 
 #include "libbb.h"
+#include "xmount.h"
 #if ENABLE_FEATURE_MOUNT_LABEL
 # include "volume_id.h"
 #else
@@ -288,7 +253,7 @@ static int verbose_mount(const char *source, const char *target,
 	int rc;
 
 	errno = 0;
-	rc = mount(source, target, filesystemtype, mountflags, data);
+	rc = xmount(source, target, filesystemtype, mountflags, data);
 	if (verbose >= 2)
 		bb_perror_msg("mount('%s','%s','%s',0x%08lx,'%s'):%d",
 			source, target, filesystemtype,
@@ -296,7 +261,7 @@ static int verbose_mount(const char *source, const char *target,
 	return rc;
 }
 #else
-#define verbose_mount(...) mount(__VA_ARGS__)
+#define verbose_mount(...) xmount(__VA_ARGS__)
 #endif
 
 // Append mount options to string

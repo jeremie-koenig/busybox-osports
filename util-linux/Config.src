@@ -492,7 +492,6 @@ config FEATURE_USE_TERMIOS
 config MOUNT
 	bool "mount"
 	default y
-	depends on PLATFORM_LINUX
 	help
 	  All files and filesystems in Unix are arranged into one big directory
 	  tree. The 'mount' utility is used to graft a filesystem onto a
@@ -679,7 +678,6 @@ config SWITCH_ROOT
 config UMOUNT
 	bool "umount"
 	default y
-	depends on PLATFORM_LINUX
 	help
 	  When you want to remove a mounted filesystem from its current mount
 	  point, for example when you are shutting down the system, the
@@ -699,7 +697,7 @@ comment "Common options for mount/umount"
 config FEATURE_MOUNT_LOOP
 	bool "Support loopback mounts"
 	default y
-	depends on MOUNT || UMOUNT
+	depends on (MOUNT || UMOUNT) && PLATFORM_LINUX
 	help
 	  Enabling this feature allows automatic mounting of files (containing
 	  filesystem images) via the linux kernel's loopback devices.
